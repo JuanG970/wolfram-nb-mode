@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025 Juan Gonzalez
 
 ;; Author: Juan Gonzalez <juan.angel19@hotmail.com>
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: wolfram, mathematica, notebook, org
 ;; URL: https://github.com/juang970/wolfram-nb-mode
@@ -55,6 +55,16 @@
 (defcustom wolfram-nb-auto-save t
   "Whether to automatically parse on opening .nb files."
   :type 'boolean
+  :group 'wolfram-nb)
+
+(defcustom wolfram-nb-wolframscript-path "wolframscript"
+  "Path to the wolframscript executable."
+  :type 'string
+  :group 'wolfram-nb)
+
+(defcustom wolfram-nb-eval-timeout 30
+  "Timeout in seconds for evaluating Wolfram expressions."
+  :type 'integer
   :group 'wolfram-nb)
 
 ;;; Data Structures
@@ -327,6 +337,104 @@ Returns the position after the closing bracket."
       (special-mode))
     (display-buffer buf)))
 
+;;; Evaluation Functions
+
+(defun wolfram-nb--check-wolframscript ()
+  "Check if wolframscript is available."
+  (executable-find wolfram-nb-wolframscript-path))
+
+(defun wolfram-nb--eval-expression (expr)
+  "Evaluate EXPR using wolframscript and return the result."
+  (unless (wolfram-nb--check-wolframscript)
+    (error "wolframscript not found. Please install Wolfram Engine or set wolfram-nb-wolframscript-path"))
+  (with-temp-buffer
+    (let* ((exit-code (call-process wolfram-nb-wolframscript-path
+                                   nil t nil
+                                   "-code" expr))
+           (output (buffer-substring-no-properties (point-min) (point-max))))
+      (if (= exit-code 0)
+          (string-trim output)
+        (error "Evaluation failed: %s" output)))))
+
+(defun wolfram-nb--format-output (output)
+  "Format OUTPUT for display in org-mode."
+  (if (string-match-p "^\\(Graphics\\|Graphics3D\\|Image\\)" output)
+      (concat output "\n; Graphics output (view in Mathematica)")
+    output))
+
+(defun wolfram-nb-eval-block ()
+  "Evaluate the Wolfram source block at point and insert output."
+  (interactive)
+  (unless (wolfram-nb--check-wolframscript)
+    (user-error "wolframscript not found. Install Wolfram Engine or configure wolfram-nb-wolframscript-path"))
+  
+  (save-excursion
+    (let* ((element (org-element-at-point))
+           (type (org-element-type element)))
+      (unless (eq type 'src-block)
+        (user-error "Not in a source block"))
+      
+      (let* ((lang (org-element-property :language element))
+             (code (org-element-property :value element)))
+        (unless (string= lang "wolfram")
+          (user-error "Not a wolfram source block"))
+        
+        (message "Evaluating...")
+        (condition-case err
+            (let ((result (wolfram-nb--eval-expression code)))
+              (goto-char (org-element-property :end element))
+              
+              ;; Remove old output block if it exists
+              (when (looking-at "[ \t]*\n?#\\+begin_example")
+                (let ((output-start (point)))
+                  (when (re-search-forward "^#\\+end_example" nil t)
+                    (forward-line)
+                    (delete-region output-start (point)))))
+              
+              ;; Insert new output
+              (insert "\n#+begin_example\n")
+              (insert (wolfram-nb--format-output result))
+              (insert "\n#+end_example\n")
+              (message "Evaluation complete"))
+          (error
+           (message "Evaluation error: %s" (error-message-string err))))))))
+
+(defun wolfram-nb-eval-buffer ()
+  "Evaluate all Wolfram source blocks in the buffer."
+  (interactive)
+  (unless (wolfram-nb--check-wolframscript)
+    (user-error "wolframscript not found. Install Wolfram Engine or configure wolfram-nb-wolframscript-path"))
+  
+  (save-excursion
+    (goto-char (point-min))
+    (let ((count 0)
+          (errors 0))
+      (org-element-map (org-element-parse-buffer) 'src-block
+        (lambda (element)
+          (when (string= (org-element-property :language element) "wolfram")
+            (goto-char (org-element-property :begin element))
+            (condition-case err
+                (progn
+                  (wolfram-nb-eval-block)
+                  (setq count (1+ count)))
+              (error
+               (setq errors (1+ errors))
+               (message "Error in block %d: %s" (1+ count) (error-message-string err)))))))
+      (message "Evaluated %d blocks (%d errors)" count errors))))
+
+(defun wolfram-nb-clear-outputs ()
+  "Clear all output blocks in the buffer."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (let ((count 0))
+      (while (re-search-forward "^#\\+begin_example\n" nil t)
+        (let ((start (match-beginning 0)))
+          (when (re-search-forward "^#\\+end_example\n?" nil t)
+            (delete-region start (point))
+            (setq count (1+ count)))))
+      (message "Cleared %d output blocks" count))))
+
 ;;;###autoload
 (defun wolfram-nb-create-new (file)
   "Create a new Wolfram Notebook FILE."
@@ -349,8 +457,11 @@ Returns the position after the closing bracket."
 
 (defvar wolfram-nb-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") 'wolfram-nb-reparse)
+    (define-key map (kbd "C-c C-c") 'wolfram-nb-eval-block)
+    (define-key map (kbd "C-c C-r") 'wolfram-nb-reparse)
     (define-key map (kbd "C-c C-v") 'wolfram-nb-view-cells)
+    (define-key map (kbd "C-c C-b") 'wolfram-nb-eval-buffer)
+    (define-key map (kbd "C-c C-k") 'wolfram-nb-clear-outputs)
     (define-key map (kbd "C-x C-s") 'wolfram-nb-save)
     map)
   "Keymap for `wolfram-nb-mode'.")

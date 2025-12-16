@@ -2,6 +2,30 @@
 
 All notable changes to wolfram-nb-mode will be documented in this file.
 
+## [0.2.0] - 2025-12-16
+
+### Added
+- **Code Evaluation**: Evaluate Wolfram Language code using wolframscript
+  - `wolfram-nb-eval-block` (C-c C-c) - Evaluate current source block
+  - `wolfram-nb-eval-buffer` (C-c C-b) - Evaluate all blocks in buffer
+  - `wolfram-nb-clear-outputs` (C-c C-k) - Clear all output blocks
+- **Input/Output Support**: Proper handling of Input and Output cell pairs
+- **Output Formatting**: Automatic formatting of evaluation results
+- **Graphics Detection**: Placeholder for graphics output with instructions
+- **Error Handling**: Graceful handling of evaluation errors
+- **Configuration**: 
+  - `wolfram-nb-wolframscript-path` - Path to wolframscript
+  - `wolfram-nb-eval-timeout` - Evaluation timeout in seconds
+- **Test Suite**: Comprehensive evaluation tests (test-eval.el)
+- **Documentation**: Complete evaluation guide (EVALUATION.md)
+- **Examples**: eval-demo.nb with Input/Output examples
+
+### Changed
+- **Key Binding**: C-c C-c now evaluates block (was reparse)
+- **Key Binding**: C-c C-r now reparses buffer (was C-c C-c)
+- Updated README with evaluation features
+- Updated QUICKREF with new commands
+
 ## [0.1.0] - 2025-12-16
 
 ### Added

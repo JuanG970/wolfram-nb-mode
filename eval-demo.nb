@@ -1,0 +1,20 @@
+Notebook[{
+Cell["Evaluation Demo", "Section"],
+Cell["This notebook demonstrates the evaluation features.", "Text"],
+Cell["Basic Arithmetic", "Subsection"],
+Cell["Let's do some simple math:", "Text"],
+Cell["2 + 2", "Input"],
+Cell["4", "Output"],
+Cell["Functions", "Subsection"],
+Cell["Define and use a function:", "Text"],
+Cell["square[x_] := x^2;\nMap[square, Range[5]]", "Input"],
+Cell["{1, 4, 9, 16, 25}", "Output"],
+Cell["Lists and Operations", "Subsection"],
+Cell["Create and manipulate lists:", "Text"],
+Cell["Total[Range[10]]", "Input"],
+Cell["55", "Output"],
+Cell["Symbolic Math", "Section"],
+Cell["Expand a polynomial:", "Text"],
+Cell["Expand[(x + 1)^3]", "Input"],
+Cell["1 + 3*x + 3*x^2 + x^3", "Output"]
+}]

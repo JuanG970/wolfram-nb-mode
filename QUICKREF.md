@@ -15,7 +15,10 @@
 | `wolfram-nb-open` | - | Open a .nb file |
 | `wolfram-nb-create-new` | - | Create new notebook |
 | `wolfram-nb-save` | `C-x C-s` | Save to .nb format |
-| `wolfram-nb-reparse` | `C-c C-c` | Reparse buffer |
+| `wolfram-nb-eval-block` | `C-c C-c` | Evaluate current block |
+| `wolfram-nb-eval-buffer` | `C-c C-b` | Evaluate all blocks |
+| `wolfram-nb-clear-outputs` | `C-c C-k` | Clear all outputs |
+| `wolfram-nb-reparse` | `C-c C-r` | Reparse buffer |
 | `wolfram-nb-view-cells` | `C-c C-v` | View raw cells |
 
 ## Syntax Mapping

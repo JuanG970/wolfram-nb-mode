@@ -11,6 +11,8 @@ An Emacs major mode for editing Wolfram Language Notebook (.nb) files using an o
 - **Org-mode Interface**: Edit notebooks using org-mode syntax (headlines, lists, code blocks)
 - **Cell Mapping**: Maintains bidirectional mapping between org elements and Cell structures
 - **Multiple Cell Types**: Supports Section, Subsection, Text, Item, Code/Input, and Output cells
+- **Code Evaluation**: Evaluate Wolfram Language code using wolframscript
+- **Input/Output Pairs**: Automatic output insertion after code evaluation
 - **Transparent Saving**: Saves changes back to `.nb` format automatically
 - **Live Preview**: View the raw Cell structures at any time
 
@@ -61,7 +63,10 @@ Edit the buffer as you would edit any org-mode file:
 ### Key Bindings
 
 - `C-x C-s` - Save changes back to `.nb` format
-- `C-c C-c` - Reparse buffer to update cell mappings
+- `C-c C-c` - Evaluate current source block (requires wolframscript)
+- `C-c C-b` - Evaluate all source blocks in buffer
+- `C-c C-k` - Clear all output blocks
+- `C-c C-r` - Reparse buffer to update cell mappings
 - `C-c C-v` - View raw Cell structures
 
 ## Cell Type Mapping
