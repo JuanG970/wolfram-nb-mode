@@ -2,6 +2,38 @@
 
 All notable changes to wolfram-nb-mode will be documented in this file.
 
+## [0.3.0] - 2025-12-16
+
+### Added
+- **CellGroupData Unwrapping**: Recursive extraction of cells from CellGroupData structures
+  - Automatically unwraps nested cell groups (Chapters, Sections, etc.)
+  - Maintains document hierarchy while extracting content
+  - Successfully tested with 42,653-line production notebook
+- **Title Support**: `Cell["text", "Title"]` → `#+TITLE: text`
+- **Chapter Support**: `Cell["text", "Chapter"]` → `* text`
+- **Subitem Support**: Proper indentation for Subitem and Subsubitem cells
+- **Improved BoxData Detection**: Better regex to avoid false matches
+- **DynamicModuleBox Detection**: Identifies and marks dynamic content
+
+### Changed
+- Enhanced `wolfram-nb--parse-cell` with better pattern matching
+- Cell style validation: Only accepts styles starting with capital letter
+- Recursive cell extraction for nested structures
+
+### Fixed
+- False positive matches on BoxData internal structure
+- Parser now correctly identifies 20+ cell types
+- Eliminates spurious cells with styles like ",", "]", "}"
+
+### Performance
+- Parses 644 cells from complex notebook in ~9 seconds (69 cells/sec)
+- Successfully handles notebooks with thousands of cells
+
+### Testing
+- New test: `test-cellgroupdata.el` - Comprehensive CellGroupData tests
+- Verified with real production notebook (JuanWeeklyReports.nb)
+- All existing tests still passing
+
 ## [0.2.0] - 2025-12-16
 
 ### Added

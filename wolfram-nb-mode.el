@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025 Juan Gonzalez
 
 ;; Author: Juan Gonzalez <juan.angel19@hotmail.com>
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: wolfram, mathematica, notebook, org
 ;; URL: https://github.com/juang970/wolfram-nb-mode
@@ -129,12 +129,35 @@ Handles \\\\, \\\", and \\n."
 
 (defun wolfram-nb--parse-cell (cell-string)
   "Parse a single Cell[...] structure from CELL-STRING.
-Returns a plist with :content and :style."
-  (when (string-match "^Cell\\[\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\",[ \t]*\"\\([^\"]+\\)\"\\]" cell-string)
+Returns a plist with :content and :style, or nil for CellGroupData."
+  (cond
+   ;; CellGroupData wrapper: Cell[CellGroupData[{...}]]
+   ;; Return nil - we'll handle these specially
+   ((string-match "^Cell\\[CellGroupData\\[" cell-string)
+    nil)
+   
+   ;; BoxData cell: Cell[BoxData[...], "Style", ...]
+   ;; Must check this BEFORE simple text cell to avoid false matches
+   ((string-match "^Cell\\[BoxData\\[" cell-string)
+    ;; Look for the style after the BoxData closes: ], "Style"
+    (when (string-match "\\],[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
+      (let ((style (match-string 1 cell-string)))
+        (list :content "[Complex BoxData content]" :style style))))
+   
+   ;; DynamicModuleBox or other dynamic: Cell[DynamicModuleBox[...], ...]
+   ((string-match "^Cell\\[DynamicModuleBox\\[" cell-string)
+    (list :content "[Dynamic content]" :style "Output"))
+   
+   ;; Simple text cell: Cell["text", "Style", ...]
+   ;; Style must start with capital letter (Section, Text, etc.)
+   ((string-match "^Cell\\[\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\",[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
     (let* ((content-raw (match-string 1 cell-string))
            (style (match-string 2 cell-string))
            (content (wolfram-nb--unescape-string content-raw)))
-      (list :content content :style style))))
+      (list :content content :style style)))
+   
+   ;; Unknown/invalid cell type
+   (t nil)))
 
 (defun wolfram-nb--find-cell-end (start)
   "Find the end position of a Cell[...] starting at START.
@@ -162,8 +185,46 @@ Returns the position after the closing bracket."
           (forward-char))
         (point)))))
 
+(defun wolfram-nb--is-cellgroupdata (cell-string)
+  "Check if CELL-STRING is a CellGroupData wrapper."
+  (string-match "^Cell\\[CellGroupData\\[" cell-string))
+
+(defun wolfram-nb--extract-cells-from-group (cell-string)
+  "Extract cells from a CellGroupData wrapper.
+CELL-STRING should be Cell[CellGroupData[{...}]].
+Returns a list of cells found inside."
+  (with-temp-buffer
+    (insert cell-string)
+    (goto-char (point-min))
+    
+    ;; Skip to the opening brace of CellGroupData[{
+    (when (re-search-forward "CellGroupData\\[{" nil t)
+      (let ((cells '()))
+        
+        ;; Now we're inside the {...}, find all cells
+        (while (re-search-forward "Cell\\[" nil t)
+          (goto-char (match-beginning 0))
+          (let* ((cell-start (point))
+                 (cell-end (wolfram-nb--find-cell-end cell-start)))
+            (when cell-end
+              (let* ((inner-cell-str (buffer-substring-no-properties cell-start cell-end))
+                     (parsed (wolfram-nb--parse-cell inner-cell-str)))
+                (cond
+                 ;; If it's another CellGroupData, recursively extract
+                 ((wolfram-nb--is-cellgroupdata inner-cell-str)
+                  (let ((nested (wolfram-nb--extract-cells-from-group inner-cell-str)))
+                    (setq cells (append cells nested))))
+                 
+                 ;; If it's a regular cell, add it
+                 (parsed
+                  (push parsed cells))))
+              (goto-char cell-end))))
+        
+        (nreverse cells)))))
+
 (defun wolfram-nb--parse-notebook (file)
-  "Parse a Wolfram Notebook FILE and return a list of cell structures."
+  "Parse a Wolfram Notebook FILE and return a list of cell structures.
+Recursively unwraps CellGroupData structures."
   (with-temp-buffer
     (insert-file-contents file)
     (goto-char (point-min))
@@ -176,10 +237,18 @@ Returns the position after the closing bracket."
             (let* ((cell-start (point))
                    (cell-end (wolfram-nb--find-cell-end cell-start)))
               (when cell-end
-                (let* ((cell-str (buffer-substring-no-properties cell-start cell-end))
-                       (parsed (wolfram-nb--parse-cell cell-str)))
-                  (when parsed
-                    (push parsed cells)))
+                (let* ((cell-str (buffer-substring-no-properties cell-start cell-end)))
+                  (cond
+                   ;; CellGroupData - extract nested cells recursively
+                   ((wolfram-nb--is-cellgroupdata cell-str)
+                    (let ((nested (wolfram-nb--extract-cells-from-group cell-str)))
+                      (setq cells (append cells nested))))
+                   
+                   ;; Regular cell - parse and add if valid
+                   (t
+                    (let ((parsed (wolfram-nb--parse-cell cell-str)))
+                      (when parsed
+                        (push parsed cells))))))
                 (goto-char cell-end))))
           (nreverse cells))
       (error "Not a valid Notebook file"))))
@@ -191,6 +260,8 @@ Returns the position after the closing bracket."
   (let ((content (plist-get cell :content))
         (style (plist-get cell :style)))
     (pcase style
+      ("Title" (format "#+TITLE: %s\n\n" content))
+      ("Chapter" (format "* %s\n" content))
       ("Section" (format "* %s\n" content))
       ("Subsection" (format "** %s\n" content))
       ("Subsubsection" (format "*** %s\n" content))
@@ -199,6 +270,12 @@ Returns the position after the closing bracket."
        ;; Remove leading bullet if present
        (let ((text (replace-regexp-in-string "^[•●◦-][ \t]*" "" content)))
          (format "- %s\n" text)))
+      ("Subitem"
+       (let ((text (replace-regexp-in-string "^[•●◦-][ \t]*" "" content)))
+         (format "  - %s\n" text)))
+      ("Subsubitem"
+       (let ((text (replace-regexp-in-string "^[•●◦-][ \t]*" "" content)))
+         (format "    - %s\n" text)))
       ((or "Code" "Input")
        (format "#+begin_src wolfram\n%s\n#+end_src\n\n" content))
       ("Output"
