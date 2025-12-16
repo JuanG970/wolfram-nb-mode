@@ -1,0 +1,21 @@
+Notebook[{
+Cell["Test Notebook", "Section"],
+Cell["This is a test notebook for wolfram-nb-mode.", "Text"],
+Cell["Basic Features", "Subsection"],
+Cell["This mode supports the following features:", "Text"],
+Cell["• Section headers", "Item"],
+Cell["• Text paragraphs", "Item"],
+Cell["• Bullet lists", "Item"],
+Cell["• Code blocks", "Item"],
+Cell["Simple Mathematics", "Subsection"],
+Cell["Let's compute something simple:", "Text"],
+Cell["x = 5;\ny = 10;\nx + y", "Code"],
+Cell["Functions", "Subsection"],
+Cell["Define a simple function:", "Text"],
+Cell["square[n_] := n^2;\nMap[square, Range[5]]", "Code"],
+Cell["Plotting", "Section"],
+Cell["Create a basic plot:", "Text"],
+Cell["Plot[Sin[x] + Cos[x], {x, 0, 2 Pi}, PlotLabel -> \"Sine and Cosine\"]", "Code"],
+Cell["Conclusion", "Section"],
+Cell["This demonstrates the basic capabilities of wolfram-nb-mode.", "Text"]
+}]
