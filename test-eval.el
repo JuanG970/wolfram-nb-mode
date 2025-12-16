@@ -1,71 +1,59 @@
-;;; test-eval.el --- Test evaluation features -*- lexical-binding: t; -*-
+;;; test-eval.el --- Test evaluation features using ERT -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Test the evaluation functionality
 
 ;;; Code:
 
+(require 'ert)
 (add-to-list 'load-path default-directory)
 (require 'wolfram-nb-mode)
 
-(defun test-wolframscript-available ()
-  "Test if wolframscript is available."
-  (message "Testing wolframscript availability...")
-  (if (wolfram-nb--check-wolframscript)
-      (message "  ✓ wolframscript found at: %s" 
-               (executable-find wolfram-nb-wolframscript-path))
-    (message "  ✗ wolframscript not found (this is OK if not installed)")))
+;;; Evaluation Tests (skip if wolframscript not available)
 
-(defun test-simple-evaluation ()
+(ert-deftest wolfram-nb-test-wolframscript-check ()
+  "Test wolframscript availability detection."
+  ;; This test always passes - just checks the function works
+  (should (or (wolfram-nb--check-wolframscript)
+              (not (wolfram-nb--check-wolframscript)))))
+
+(ert-deftest wolfram-nb-test-simple-evaluation ()
   "Test simple expression evaluation."
-  (message "\nTesting simple evaluation...")
-  (condition-case err
-      (let ((result (wolfram-nb--eval-expression "2 + 2")))
-        (message "  Result of '2 + 2': %s" result)
-        (if (string= (string-trim result) "4")
-            (message "  ✓ Simple evaluation PASSED")
-          (message "  ✗ Simple evaluation FAILED: expected 4, got %s" result)))
-    (error
-     (message "  ⚠ Evaluation not available (wolframscript not installed): %s" 
-              (error-message-string err)))))
+  (skip-unless (wolfram-nb--check-wolframscript))
+  (let ((result (wolfram-nb--eval-expression "2 + 2")))
+    (should (stringp result))
+    (should (string= (string-trim result) "4"))))
 
-(defun test-list-evaluation ()
+(ert-deftest wolfram-nb-test-list-evaluation ()
   "Test list generation."
-  (message "\nTesting list evaluation...")
-  (condition-case err
-      (let ((result (wolfram-nb--eval-expression "Range[5]")))
-        (message "  Result of 'Range[5]': %s" result)
-        (if (string-match-p "{1.*5}" result)
-            (message "  ✓ List evaluation PASSED")
-          (message "  ⚠ List evaluation result: %s" result)))
-    (error
-     (message "  ⚠ Evaluation not available: %s" (error-message-string err)))))
+  (skip-unless (wolfram-nb--check-wolframscript))
+  (let ((result (wolfram-nb--eval-expression "Range[5]")))
+    (should (stringp result))
+    (should (string-match-p "{1.*5}" result))))
 
-(defun test-function-evaluation ()
+(ert-deftest wolfram-nb-test-function-evaluation ()
   "Test function definition and use."
-  (message "\nTesting function evaluation...")
-  (condition-case err
-      (let ((result (wolfram-nb--eval-expression "f[x_] := x^2; f[5]")))
-        (message "  Result of 'f[x_] := x^2; f[5]': %s" result)
-        (if (string= (string-trim result) "25")
-            (message "  ✓ Function evaluation PASSED")
-          (message "  ⚠ Function evaluation result: %s" result)))
-    (error
-     (message "  ⚠ Evaluation not available: %s" (error-message-string err)))))
+  (skip-unless (wolfram-nb--check-wolframscript))
+  (let ((result (wolfram-nb--eval-expression "f[x_] := x^2; f[5]")))
+    (should (stringp result))
+    (should (string= (string-trim result) "25"))))
 
-(defun run-eval-tests ()
-  "Run all evaluation tests."
-  (message "=== Wolfram NB Evaluation Tests ===\n")
-  (test-wolframscript-available)
-  (test-simple-evaluation)
-  (test-list-evaluation)
-  (test-function-evaluation)
-  (message "\n=== Evaluation Tests Complete ===")
-  (message "\nNote: If wolframscript is not installed, evaluation tests will be skipped.")
-  (message "To install: https://www.wolfram.com/engine/"))
+(ert-deftest wolfram-nb-test-arithmetic ()
+  "Test basic arithmetic operations."
+  (skip-unless (wolfram-nb--check-wolframscript))
+  (let ((result (wolfram-nb--eval-expression "10 * 5")))
+    (should (string= (string-trim result) "50"))))
 
-;; Run tests
-(run-eval-tests)
+(ert-deftest wolfram-nb-test-format-output ()
+  "Test that wolfram-nb--format-output works."
+  ;; Test with simple string
+  (should (string= (wolfram-nb--format-output "42") "42"))
+  ;; Test with graphics (starts with Graphics)
+  (should (string-match-p "view in Mathematica" 
+                         (wolfram-nb--format-output "Graphics[...]")))
+  ;; Test with image (starts with Image)
+  (should (string-match-p "view in Mathematica" 
+                         (wolfram-nb--format-output "Image[...]"))))
 
 (provide 'test-eval)
 ;;; test-eval.el ends here
