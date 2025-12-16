@@ -6,7 +6,7 @@
 ;;; Code:
 
 (require 'ert)
-(add-to-list 'load-path default-directory)
+(add-to-list 'load-path "..")
 (require 'wolfram-nb-mode)
 
 ;;; Evaluation Tests (skip if wolframscript not available)

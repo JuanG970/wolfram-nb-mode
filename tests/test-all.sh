@@ -1,14 +1,18 @@
 #!/bin/bash
 echo "╔════════════════════════════════════════════════════════╗"
-echo "║     wolfram-nb-mode v0.3.0 - Complete Test Suite      ║"
+echo "║     wolfram-nb-mode v0.3.0 - Test Suite               ║"
 echo "║                Using ERT Framework                     ║"
 echo "╚════════════════════════════════════════════════════════╝"
 echo ""
 
 FAILED=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$SCRIPT_DIR"
 
 echo "1. Unit Tests (16 tests)..."
-UNIT_RESULT=$(emacs --batch -l ert -l test-mode.el -f ert-run-tests-batch-and-exit 2>&1)
+UNIT_RESULT=$(emacs --batch --eval "(add-to-list 'load-path \"$ROOT_DIR\")" -l ert -l test-mode.el -f ert-run-tests-batch-and-exit 2>&1)
 if echo "$UNIT_RESULT" | grep -q "16 results as expected"; then
     echo "   ✓ Unit tests PASSED (16/16)"
 else
@@ -19,7 +23,7 @@ fi
 
 echo ""
 echo "2. Integration Tests (6 tests)..."
-INTEG_RESULT=$(emacs --batch -l ert -l integration-test.el -f ert-run-tests-batch-and-exit 2>&1)
+INTEG_RESULT=$(emacs --batch --eval "(add-to-list 'load-path \"$ROOT_DIR\")" -l ert -l integration-test.el -f ert-run-tests-batch-and-exit 2>&1)
 if echo "$INTEG_RESULT" | grep -q "6 results as expected"; then
     echo "   ✓ Integration tests PASSED (6/6)"
 else
@@ -30,10 +34,8 @@ fi
 
 echo ""
 echo "3. Evaluation Tests (6 tests)..."
-# Evaluation tests may skip some if wolframscript not available
-EVAL_RESULT=$(emacs --batch -l ert -l test-eval.el -f ert-run-tests-batch-and-exit 2>&1)
+EVAL_RESULT=$(emacs --batch --eval "(add-to-list 'load-path \"$ROOT_DIR\")" -l ert -l test-eval.el -f ert-run-tests-batch-and-exit 2>&1)
 if echo "$EVAL_RESULT" | grep -q "results as expected"; then
-    # Extract test counts using awk
     PASSED=$(echo "$EVAL_RESULT" | grep "passed" | awk '{print $2}' | head -1)
     TOTAL=$(echo "$EVAL_RESULT" | grep "Ran" | awk '{print $2}' | head -1)
     echo "   ✓ Evaluation tests PASSED ($PASSED/$TOTAL)"
@@ -47,12 +49,12 @@ else
 fi
 
 echo ""
-echo "4. Parse eval-demo.nb..."
-CELLS=$(emacs --batch --eval "(progn (add-to-list 'load-path \".\") (require 'wolfram-nb-mode) (message \"%d\" (length (wolfram-nb--parse-notebook \"eval-demo.nb\"))))" 2>&1 | tail -1)
+echo "4. Parse example notebook..."
+CELLS=$(emacs --batch --eval "(progn (add-to-list 'load-path \"$ROOT_DIR\") (require 'wolfram-nb-mode) (message \"%d\" (length (wolfram-nb--parse-notebook \"../examples/eval-demo.nb\"))))" 2>&1 | tail -1)
 if [ "$CELLS" -gt 0 ]; then
-    echo "   ✓ Parsed $CELLS cells from eval-demo.nb"
+    echo "   ✓ Parsed $CELLS cells"
 else
-    echo "   ✗ Failed to parse eval-demo.nb"
+    echo "   ✗ Failed to parse example"
     FAILED=1
 fi
 
@@ -69,16 +71,5 @@ else
 fi
 
 echo ""
-echo "Features Verified:"
-echo "  ✓ String escaping/unescaping"
-echo "  ✓ Notebook parsing (simple and complex)"
-echo "  ✓ CellGroupData unwrapping"
-echo "  ✓ Cell-to-org conversion"
-echo "  ✓ Org-to-cell conversion"
-echo "  ✓ Roundtrip conversion"
-echo "  ✓ Code evaluation (if wolframscript available)"
-echo "  ✓ Input/Output handling"
-echo ""
-echo "Total: 28+ ERT tests"
-echo ""
-echo "wolfram-nb-mode v0.3.0 is ready!"
+echo "Total: 28 ERT tests"
+echo "wolfram-nb-mode v0.3.0 ready!"

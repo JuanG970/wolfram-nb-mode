@@ -6,7 +6,7 @@
 ;;; Code:
 
 (require 'ert)
-(add-to-list 'load-path default-directory)
+(add-to-list 'load-path "..")
 (require 'wolfram-nb-mode)
 
 ;;; String Escaping Tests
@@ -36,7 +36,7 @@
 
 (ert-deftest wolfram-nb-test-parse-notebook ()
   "Test parsing a notebook file."
-  (let ((cells (wolfram-nb--parse-notebook "test.nb")))
+  (let ((cells (wolfram-nb--parse-notebook "../examples/simple.nb")))
     (should (> (length cells) 0))
     (should (listp cells))
     ;; Check that each cell has required properties
@@ -116,7 +116,7 @@
 
 (ert-deftest wolfram-nb-test-roundtrip-conversion ()
   "Test roundtrip: notebook -> org -> cells -> notebook."
-  (let* ((cells1 (wolfram-nb--parse-notebook "test.nb"))
+  (let* ((cells1 (wolfram-nb--parse-notebook "../examples/simple.nb"))
          (org-text (wolfram-nb--cells-to-org cells1))
          (cells2 (wolfram-nb--org-to-cells org-text))
          (notebook-text (wolfram-nb--cells-to-notebook cells2)))

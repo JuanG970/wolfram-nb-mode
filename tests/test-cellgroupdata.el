@@ -5,7 +5,7 @@
 
 ;;; Code:
 
-(add-to-list 'load-path default-directory)
+(add-to-list 'load-path "..")
 (require 'wolfram-nb-mode)
 
 (defun test-cellgroupdata-complex-notebook ()

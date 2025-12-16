@@ -2,6 +2,17 @@
 
 All notable changes to wolfram-nb-mode will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Reorganized repository structure following Emacs package best practices
+  - Tests moved to `tests/` directory
+  - Documentation moved to `docs/` directory
+  - Examples moved to `examples/` directory
+- Simplified README for clarity
+- Consolidated redundant documentation files
+- Added .gitignore and CONTRIBUTING.md
+
 ## [0.3.0] - 2025-12-16
 
 ### Added

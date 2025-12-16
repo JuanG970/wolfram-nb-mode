@@ -1,0 +1,18 @@
+# Emacs
+*~
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Testing artifacts
+tests/.test-*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.bak
