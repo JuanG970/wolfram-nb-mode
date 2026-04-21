@@ -1264,17 +1264,31 @@ Cell[...] structure for serialization back to Notebook format.
 ;;;; Auto-mode
 
 ;;;###autoload
-(add-to-list 'auto-mode-alist '("\\.nb\\'" . wolfram-nb--auto-open))
+(add-to-list 'auto-mode-alist '("\\.nb\\'" . wolfram-nb-mode))
 
 (defun wolfram-nb--auto-open ()
-  "Automatically open .nb files with `wolfram-nb-open'."
-  (when wolfram-nb-auto-open
-    (let ((file (buffer-file-name))
-          (raw-buf (current-buffer)))
-      (when file
-        (wolfram-nb-open file)
-        (when (buffer-live-p raw-buf)
-          (kill-buffer raw-buf))))))
+  "Automatically parse .nb files when opened in wolfram-nb-mode."
+  (when (and wolfram-nb-auto-open
+             wolfram-nb--original-file
+             (not (buffer-modified-p))
+             (= (point-min) (point-max)))
+    (let* ((file wolfram-nb--original-file)
+           (cells (wolfram-nb--parse-notebook file))
+           (inhibit-read-only t))
+      (erase-buffer)
+      (insert (wolfram-nb--cells-to-org cells))
+      (goto-char (point-min))
+      (set-buffer-modified-p nil)
+      (setq wolfram-nb--cells cells
+            wolfram-nb--cell-count (length cells))
+      (wolfram-nb--refresh-session)
+      (message "Opened %s (%d cells)%s"
+               (file-name-nondirectory file) wolfram-nb--cell-count
+               (if wolfram-nb--session-raw
+                   (format " [session: %s]" wolfram-nb--session-raw)
+                 "")))))
+
+(add-hook 'wolfram-nb-mode-hook #'wolfram-nb--auto-open)
 
 (provide 'wolfram-nb-mode)
 ;;; wolfram-nb-mode.el ends here
