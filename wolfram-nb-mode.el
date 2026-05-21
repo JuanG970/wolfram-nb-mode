@@ -195,17 +195,29 @@ Set by `wolfram-nb--refresh-session' from #+WOLFRAM_SESSION: or TaggingRules.")
 
 (defun wolfram-nb--unescape-string (str)
   "Convert escaped Mathematica string STR to Emacs Lisp string.
-Handles \\\\, \\\", \\n, and \\t sequences in a single pass."
-  (replace-regexp-in-string
-   "\\\\\\([\\\\\"nt]\\)"
-   (lambda (match)
-     (pcase (aref match 1)
-       (?\\  "\\")
-       (?\"  "\"")
-       (?n   "\n")
-       (?t   "\t")
-       (_    (substring match 1))))
-   str nil t))
+Handles \\\\, \\\", \\n, and \\t sequences in a single pass.
+Also strips long-string markers \\< and \\> if present, and handles line continuations."
+  (let* ((clean (if (string-prefix-p "\\<" str)
+                    (substring str 2)
+                  str))
+         (clean2 (if (string-suffix-p "\\>" clean)
+                     (substring clean 0 -2)
+                   clean)))
+    ;; Remove line continuations (backslash followed by optional whitespace and newline)
+    (setq clean2 (replace-regexp-in-string "\\\\[ \t]*\n" "" clean2))
+    ;; Trim leading/trailing newlines/whitespace if it was a long string
+    (when (or (string-prefix-p "\\<" str) (string-suffix-p "\\>" str))
+      (setq clean2 (string-trim clean2)))
+    (replace-regexp-in-string
+     "\\\\\\([\\\\\"nt]\\)"
+     (lambda (match)
+       (pcase (aref match 1)
+         (?\\  "\\")
+         (?\"  "\"")
+         (?n   "\n")
+         (?t   "\t")
+         (_    (substring match 1))))
+     clean2 nil t)))
 
 (defun wolfram-nb--escape-string (str)
   "Escape STR for inclusion in a Mathematica string literal.
@@ -223,32 +235,27 @@ Handles backslash, double-quote, newline, and tab in a single pass."
 
 ;;;; Low-level parsing
 
+(defvar wolfram-nb--parse-syntax-table
+  (let ((st (make-syntax-table)))
+    (modify-syntax-entry ?\[ "(]" st)
+    (modify-syntax-entry ?\] ")[" st)
+    (modify-syntax-entry ?{ "(}" st)
+    (modify-syntax-entry ?} "){" st)
+    (modify-syntax-entry ?\" "\"" st)
+    (modify-syntax-entry ?\\ "\\" st)
+    st)
+  "Syntax table for parsing Mathematica notebook expressions.")
+
 (defun wolfram-nb--find-cell-end (start)
   "Find the end position of a Cell[...] starting at START.
-Tracks bracket depth and string boundaries.
 Returns the position after the closing bracket, or nil."
   (save-excursion
     (goto-char start)
     (when (looking-at "Cell\\[")
-      (goto-char (match-end 0))
-      (let ((depth 1)
-            (in-string nil)
-            (escape-next nil))
-        (while (and (> depth 0) (not (eobp)))
-          (let ((char (char-after)))
-            (cond
-             (escape-next
-              (setq escape-next nil))
-             ((and in-string (= char ?\\))
-              (setq escape-next t))
-             ((= char ?\")
-              (setq in-string (not in-string)))
-             ((and (not in-string) (= char ?\[))
-              (setq depth (1+ depth)))
-             ((and (not in-string) (= char ?\]))
-              (setq depth (1- depth)))))
-          (forward-char))
-        (when (= depth 0)
+      (with-syntax-table wolfram-nb--parse-syntax-table
+        (goto-char (+ start 4)) ;; Go to the '['
+        (ignore-errors
+          (forward-sexp 1)
           (point))))))
 
 (defun wolfram-nb--is-cellgroupdata (cell-string)
@@ -260,30 +267,23 @@ Returns the position after the closing bracket, or nil."
 HEAD is a string like \"Cell\" or \"StyleBox\".
 Returns the raw string content of the first argument, or nil if not found."
   (with-temp-buffer
+    (set-syntax-table wolfram-nb--parse-syntax-table)
     (insert str)
     (goto-char (point-min))
     (when (search-forward (concat head "[") nil t)
-      (let ((depth 0)
-            (in-string nil)
-            (escape-next nil)
-            (start (point))
+      (let ((start (point))
             (end nil))
         (while (and (not (eobp)) (not end))
-          (let ((char (char-after)))
-            (cond
-             (escape-next (setq escape-next nil))
-             ((and in-string (= char ?\\)) (setq escape-next t))
-             ((= char ?\") (setq in-string (not in-string)))
-             ((and (not in-string) (= char ?\[)) (setq depth (1+ depth)))
-             ((and (not in-string) (= char ?\]))
-              (if (= depth 0)
-                  (setq end (point)) ;; End of Head means end of arg if no comma
-                (setq depth (1- depth))))
-             ((and (not in-string) (= char ?{)) (setq depth (1+ depth)))
-             ((and (not in-string) (= char ?})) (setq depth (1- depth)))
-             ((and (not in-string) (= depth 0) (= char ?,))
-              (setq end (point))))
-            (forward-char)))
+          (if (re-search-forward "[][{}\",]" nil t)
+              (let ((char (char-before)))
+                (goto-char (match-beginning 0))
+                (cond
+                 ((= char ?,)  (setq end (point)))
+                 ((= char ?\]) (setq end (point)))
+                 ((= char ?\[) (forward-sexp 1))
+                 ((= char ?{)  (forward-sexp 1))
+                 ((= char ?\") (forward-sexp 1))))
+            (goto-char (point-max))))
         (when end
           (buffer-substring-no-properties start end))))))
 
@@ -295,29 +295,28 @@ Returns the raw string content of the first argument, e.g. BoxData[...]."
 (defun wolfram-nb--split-args (args-string)
   "Split ARGS-STRING by top-level commas.
 Returns a list of strings."
-  (let ((parts '())
-        (depth 0)
-        (in-string nil)
-        (escape-next nil)
-        (start 0)
-        (len (length args-string))
-        (i 0))
-    (while (< i len)
-      (let ((char (aref args-string i)))
-        (cond
-         (escape-next (setq escape-next nil))
-         ((and in-string (= char ?\\)) (setq escape-next t))
-         ((= char ?\") (setq in-string (not in-string)))
-         ((and (not in-string) (= char ?\[)) (setq depth (1+ depth)))
-         ((and (not in-string) (= char ?\])) (setq depth (1- depth)))
-         ((and (not in-string) (= char ?{)) (setq depth (1+ depth)))
-         ((and (not in-string) (= char ?})) (setq depth (1- depth)))
-         ((and (not in-string) (= depth 0) (= char ?,))
-          (push (string-trim (substring args-string start i)) parts)
-          (setq start (1+ i))))
-        (setq i (1+ i))))
-    (push (string-trim (substring args-string start)) parts)
-    (nreverse parts)))
+  (with-temp-buffer
+    (set-syntax-table wolfram-nb--parse-syntax-table)
+    (insert args-string)
+    (goto-char (point-min))
+    (let ((parts '())
+          (start (point)))
+      (while (not (eobp))
+        (if (re-search-forward "[][{}\",]" nil t)
+            (let ((char (char-before)))
+              (goto-char (match-beginning 0))
+              (cond
+               ((= char ?,)
+                (push (string-trim (buffer-substring-no-properties start (point))) parts)
+                (forward-char 1)
+                (setq start (point)))
+               ((= char ?\[) (ignore-errors (forward-sexp 1)))
+               ((= char ?{)  (ignore-errors (forward-sexp 1)))
+               ((= char ?\") (ignore-errors (forward-sexp 1)))
+               (t (forward-char 1))))
+          (goto-char (point-max))))
+      (push (string-trim (buffer-substring-no-properties start (point))) parts)
+      (nreverse parts))))
 
 (defun wolfram-nb--parse-textdata-content (content)
   "Parse TextData CONTENT (a string inside TextData[{...}] or TextData[...]).
@@ -363,10 +362,10 @@ If complex content (GraphicsBox, etc.) is detected, returns the raw content
 string.  Otherwise pulls all string literals from RowBox structures and
 joins them."
   (if (string-match-p "GraphicsBox\\|RasterBox\\|FormBox\\|GridBox" cell-string)
-      (wolfram-nb--extract-first-argument cell-string)
+      (or (wolfram-nb--extract-head-argument cell-string "BoxData") cell-string)
     (let ((strings '())
           (start 0))
-      (while (string-match "\"\\([^\"\\\\]*\\(?:\\\\.[^\"\\\\]*\\)*\\)\"" cell-string start)
+      (while (string-match "\"\\([^\"\\\\]*\\(?:\\\\\\(?:.\\|\n\\)[^\"\\\\]*\\)*\\)\"" cell-string start)
         (let ((s (match-string 1 cell-string)))
           ;; Skip style strings and structural keywords
           (unless (or (string-match-p "^\\(Input\\|Output\\|Code\\|Section\\|Text\\|BoxData\\|RowBox\\|SuperscriptBox\\|SubscriptBox\\|FractionBox\\|SqrtBox\\)$" s)
@@ -436,7 +435,7 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
            :raw-options raw-options)))))
 
    ;; Simple text cell: Cell["text", "Style", ...]
-   ((string-match "\\`Cell\\[\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\",[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
+   ((string-match "\\`Cell\\[\"\\([^\"\\\\]*\\(?:\\\\\\(?:.\\|\n\\)[^\"\\\\]*\\)*\\)\",[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
     (let ((content-raw (match-string 1 cell-string))
           (style (match-string 2 cell-string))
           (raw-options (wolfram-nb--extract-cell-options cell-string (match-end 0))))
