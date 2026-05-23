@@ -1,0 +1,25 @@
+#+TITLE: Wolfram NB Mode - Roadmap
+
+* Phase 1: Parsing Stability & Round-trip Fidelity
+** Support 100% round-trip integrity across most notebook files
+** Graceful handling of unparsed/unrecognized cell types (fallback to raw block)
+** Safe preservation of advanced notebook and cell-level metadata
+** Performance scaling for notebooks with thousands of cells
+
+* Phase 2: Core Org-Mode Markup Support
+** Complete list support (numbered lists, bulleted lists, and description lists)
+** Basic inline markup parsing (bold, italics, underline, verbatim)
+** Embedded images and graphics placeholder representation
+** Support for standard document blocks (quotes, tables, horizontal rules)
+
+* Phase 3: Usability & Workspace UX
+** Enhanced Imenu support and outline-based navigation
+** Improved mode-line indicators and buffer state feedback
+** Streamlined error reporting with clear location and context diagnostics
+** Automatic/smart configuration of wolframscript paths and sessions
+
+* Phase 4: Code Quality & Coverage
+** Automated Continuous Integration (CI) configuration (lint, test, byte-compile)
+** Expand test suite coverage to 100% of new parsing routines
+** Multi-notebook validation suite (corpus of public Mathematica notebooks)
+** Clean up compilation warnings and maximize code readability

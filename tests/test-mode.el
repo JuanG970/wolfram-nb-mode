@@ -229,6 +229,19 @@ Ensures that even with complex options, TextData content is extracted cleanly."
     (should-not (string-match-p "In\\[2\\]" (wolfram-nb-cell-content c)))
     (should-not (string-match-p "123" (wolfram-nb-cell-content c)))))
 
+(ert-deftest wolfram-nb-test-parse-cell-long-string-continuation ()
+  "Test parsing simple text cells formatted as long strings with line continuation."
+  (let ((c (wolfram-nb--parse-cell
+            "Cell[\"\\<\\\nline 1 \\\nline 2\\\n\\>\", \"Text\"]")))
+    (should c)
+    (should (string= (wolfram-nb-cell-style c) "Text"))
+    (should (string= (wolfram-nb-cell-content c) "line 1 line 2")))
+  (let ((c (wolfram-nb--parse-cell
+            "Cell[\"\\<\\\nThe idea will be to migrate all Wyatt[\\\"ERP Reports\\\"] into this framework. \\\nIf we can cover some of the use cases there we can consider the testing to be \\\nsuccessful.\\\n\\>\", \"Text\"]")))
+    (should c)
+    (should (string= (wolfram-nb-cell-style c) "Text"))
+    (should (string= (wolfram-nb-cell-content c) "The idea will be to migrate all Wyatt[\"ERP Reports\"] into this framework. If we can cover some of the use cases there we can consider the testing to be successful."))))
+
 ;;; =========================================================
 ;;; Parsing: find-cell-end
 ;;; =========================================================
