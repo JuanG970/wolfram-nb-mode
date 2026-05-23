@@ -772,6 +772,28 @@ Ensures that even with complex options, TextData content is extracted cleanly."
     (wolfram-nb-clear-overlays)
     (should-not wolfram-nb--overlays)))
 
+(ert-deftest wolfram-nb-test-overlays-evaluation-rendering ()
+  "Test that evaluation outputs of graphics trigger overlay rendering."
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (insert "#+begin_example\nPlot[x, {x, 0, 1}]\n#+end_example\n")
+    (let ((wolfram-nb-rasterize-graphics t))
+      (wolfram-nb--render-evaluation-output (point-min) (point-max) "Plot[x, {x, 0, 1}]")
+      (should (= (length wolfram-nb--overlays) 1))
+      (should (overlay-get (car wolfram-nb--overlays) 'wolfram-nb-result))
+      (wolfram-nb-clear-overlays))))
+
+(ert-deftest wolfram-nb-test-overlays-toggle-command ()
+  "Test the interactive toggle-overlays command."
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (insert "#+begin_src wolfram-raw\nBoxData[SomeGraphicsBox[]]\n#+end_src\n")
+    (should-not wolfram-nb--overlays)
+    (wolfram-nb-toggle-overlays)
+    (should (= (length wolfram-nb--overlays) 2))
+    (wolfram-nb-toggle-overlays)
+    (should-not wolfram-nb--overlays)))
+
 ;;; =========================================================
 ;;; =========================================================
 ;;; Stress / performance
