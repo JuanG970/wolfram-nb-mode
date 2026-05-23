@@ -1478,7 +1478,6 @@ Cell[...] structure for serialization back to Notebook format.
 \\{wolfram-nb-mode-map}"
   (setq-local write-contents-functions '(wolfram-nb-save))
   (setq-local imenu-create-index-function #'wolfram-nb--imenu-create-index)
-  (setq mode-name '(:eval (format "Wolfram-NB[%d]" wolfram-nb--cell-count)))
   (font-lock-add-keywords nil wolfram-nb-font-lock-keywords)
   (message "Wolfram-NB mode. C-c C-c eval | C-x C-s save | C-c C-n new block | C-c C-s session"))
 
