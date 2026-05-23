@@ -729,6 +729,15 @@ Ensures that even with complex options, TextData content is extracted cleanly."
     (let ((index (wolfram-nb--imenu-create-index)))
       (should (>= (length index) 3)))))
 
+(ert-deftest wolfram-nb-test-phase3-imenu-style-extraction ()
+  "Test that Imenu extracts styles from wolfram-raw blocks."
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (insert "#+ATTR_WOLFRAM: :style \"MyCustomStyle\"\n#+begin_src wolfram-raw\nBoxData[...]\n#+end_src\n")
+    (let ((index (wolfram-nb--imenu-create-index)))
+      (should (= (length index) 1))
+      (should (string-match-p "MyCustomStyle" (car (car index)))))))
+
 ;;; =========================================================
 ;;; =========================================================
 ;;; Stress / performance

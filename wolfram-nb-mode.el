@@ -1156,8 +1156,27 @@ Calls CALLBACK with the result string on success, or nil on error."
 ;;;; Evaluation — synchronous
 
 (defun wolfram-nb--check-wolframscript ()
-  "Return the path to wolframscript if available, nil otherwise."
-  (executable-find wolfram-nb-wolframscript-path))
+  "Return the path to wolframscript if available, nil otherwise.
+If `wolfram-nb-wolframscript-path' is not found in PATH, searches in standard
+system installation directories."
+  (or (executable-find wolfram-nb-wolframscript-path)
+      (let ((fallbacks
+             (cond
+              ((eq system-type 'darwin)
+               '("/Applications/Mathematica.app/Contents/MacOS/wolframscript"
+                 "/Applications/Wolfram Desktop.app/Contents/MacOS/wolframscript"
+                 "/Applications/Wolfram Engine.app/Contents/MacOS/wolframscript"
+                 "/usr/local/bin/wolframscript"
+                 "/opt/homebrew/bin/wolframscript"))
+              ((eq system-type 'windows-nt)
+               '("C:\\Program Files\\Wolfram Research\\WolframScript\\wolframscript.exe"
+                 "C:\\Program Files\\Wolfram Research\\Mathematica\\14.0\\wolframscript.exe"
+                 "C:\\Program Files\\Wolfram Research\\Mathematica\\13.3\\wolframscript.exe"
+                 "C:\\Program Files\\Wolfram Research\\Mathematica\\13.2\\wolframscript.exe"))
+              (t
+               '("/usr/bin/wolframscript"
+                 "/usr/local/bin/wolframscript")))))
+        (cl-find-if #'file-executable-p fallbacks))))
 
 (defun wolfram-nb--eval-expression (expr)
   "Evaluate EXPR synchronously via wolframscript, return result string."
@@ -1344,7 +1363,7 @@ _PARAMS is the org-babel parameter alist (currently unused)."
 Groups entries by cell type."
   (let ((index '())
         (heading-re "^\\(\\*+\\) \\(.+\\)$")
-        (src-re "^#\\+begin_src wolfram"))
+        (src-re "^#\\+begin_src \\(wolfram-raw\\|wolfram\\)"))
     ;; Collect headings
     (save-excursion
       (goto-char (point-min))
@@ -1359,7 +1378,19 @@ Groups entries by cell type."
       (let ((n 0))
         (while (re-search-forward src-re nil t)
           (setq n (1+ n))
-          (push (cons (format "Code block #%d" n) (match-beginning 0)) index))))
+          (let* ((block-type (match-string 1))
+                 (label
+                  (if (string= block-type "wolfram-raw")
+                      ;; Try to extract style from previous ATTR_WOLFRAM
+                      (save-excursion
+                        (goto-char (match-beginning 0))
+                        (forward-line -1)
+                        (let ((line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+                          (if (string-match ":style[ \t\n]*\"\\([^\"]*\\)\"" line)
+                              (format "Raw block [%s] #%d" (match-string 1 line) n)
+                            (format "Raw block #%d" n))))
+                    (format "Code block #%d" n))))
+            (push (cons label (match-beginning 0)) index)))))
     (nreverse index)))
 
 ;;;; Interactive session commands
@@ -1447,6 +1478,7 @@ Cell[...] structure for serialization back to Notebook format.
 \\{wolfram-nb-mode-map}"
   (setq-local write-contents-functions '(wolfram-nb-save))
   (setq-local imenu-create-index-function #'wolfram-nb--imenu-create-index)
+  (setq mode-name '(:eval (format "Wolfram-NB[%d]" wolfram-nb--cell-count)))
   (font-lock-add-keywords nil wolfram-nb-font-lock-keywords)
   (message "Wolfram-NB mode. C-c C-c eval | C-x C-s save | C-c C-n new block | C-c C-s session"))
 
