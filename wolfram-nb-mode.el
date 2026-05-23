@@ -84,6 +84,12 @@
     ("Subsubitem" . 3))
   "Alist mapping Wolfram Cell styles to Org list levels.")
 
+(defconst wolfram-nb-numbered-list-styles
+  '(("ItemNumbered" . 1)
+    ("SubitemNumbered" . 2)
+    ("SubsubitemNumbered" . 3))
+  "Alist mapping Wolfram Cell styles to Org numbered list levels.")
+
 ;;;; Customization
 
 (defgroup wolfram-nb nil
@@ -348,6 +354,10 @@ Handles StyleBox for Bold/Italic formatting."
                 (setq result (concat result "*" clean-text "*")))
                ((string-match-p "\"Italic\"" style-part)
                 (setq result (concat result "/" clean-text "/")))
+               ((string-match-p "\"Underlined\"" style-part)
+                (setq result (concat result "_" clean-text "_")))
+               ((string-match-p "\"Courier\"" style-part)
+                (setq result (concat result "=" clean-text "=")))
                (t
                 (setq result (concat result clean-text)))))))
          ;; Fallback for other boxes
@@ -591,6 +601,82 @@ When called from a `wolfram-nb-mode' buffer, also sets
 
 ;;;; Cell -> Org conversion
 
+(defun wolfram-nb--org-element-to-textdata (el &optional rich-context)
+  "Convert Org element EL to a cons of (parts-list . is-rich).
+RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
+  (cond
+   ((stringp el)
+    (if rich-context
+        (cons (list (format "\"%s\"" (wolfram-nb--escape-string el))) nil)
+      (cons (list el) nil)))
+   (t
+    (let* ((type (org-element-type el))
+           (contents (org-element-contents el))
+           (is-inline-rich (memq type '(bold italic underline code verbatim)))
+           (any-rich is-inline-rich)
+           (child-results '()))
+      ;; First pass: check if any child is rich
+      (dolist (c contents)
+        (let ((res (wolfram-nb--org-element-to-textdata c (or rich-context is-inline-rich))))
+          (push res child-results)
+          (when (cdr res) (setq any-rich t))))
+      (setq child-results (nreverse child-results))
+      
+      (let ((res-cons
+             (cond
+              ;; Link elements
+              ((eq type 'link)
+               (let* ((link-type (org-element-property :type el))
+                      (path (org-element-property :path el))
+                      (desc-parts '())
+                      (desc (when contents
+                              (dolist (c contents)
+                                (setq desc-parts (append desc-parts (car (wolfram-nb--org-element-to-textdata c rich-context)))))
+                              (string-join desc-parts "")))
+                      (raw-link (if desc
+                                    (format "[[%s:%s][%s]]" link-type path desc)
+                                  (format "[[%s:%s]]" link-type path))))
+                 (cons (if rich-context
+                           (list (format "\"%s\"" (wolfram-nb--escape-string raw-link)))
+                         (list raw-link))
+                       nil)))
+
+              ;; Code or verbatim elements
+              ((memq type '(code verbatim))
+               (let ((val (org-element-property :value el)))
+                 (cons (list (format "StyleBox[\"%s\", \"Courier\"]" (wolfram-nb--escape-string val))) t)))
+              
+              ;; Bold, Italic, Underline elements
+              (is-inline-rich
+               (let* ((style (cond ((eq type 'bold) "Bold")
+                                   ((eq type 'italic) "Italic")
+                                   ((eq type 'underline) "Underlined")))
+                      (inner-parts '()))
+                 (dolist (c contents)
+                   (let ((res (wolfram-nb--org-element-to-textdata c t)))
+                     (setq inner-parts (append inner-parts (car res)))))
+                 (let ((joined-inner (string-join inner-parts ", ")))
+                   (cons (list (format "StyleBox[%s, \"%s\"]" joined-inner style)) t))))
+              
+              ;; Other/Container elements
+              (t
+               (let ((parts '()))
+                 (dolist (c contents)
+                   (let ((res (wolfram-nb--org-element-to-textdata c (or rich-context any-rich))))
+                     (setq parts (append parts (car res)))))
+                 (cons parts any-rich))))))
+        ;; Append trailing spaces if this is an inline element and has post-blank
+        (let* ((post-blank (or (org-element-property :post-blank el) 0))
+               (parts (car res-cons))
+               (rich (cdr res-cons)))
+          (if (and (> post-blank 0) (memq type '(bold italic underline code verbatim link)))
+              (let ((blank-str (make-string post-blank ?\s)))
+                (cons (append parts (list (if (or rich-context rich)
+                                              (format "\"%s\"" blank-str)
+                                            blank-str)))
+                      rich))
+            res-cons)))))))
+
 (defun wolfram-nb--cell-to-org (cell)
   "Convert a `wolfram-nb-cell' CELL to Org-mode text."
   (let ((content (wolfram-nb-cell-content cell))
@@ -612,12 +698,20 @@ When called from a `wolfram-nb-mode' buffer, also sets
                 (if raw-opts (format ":PROPERTIES:\n:WOLFRAM_OPTIONS: %s\n:END:\n" raw-opts) ""))))
 
      ;; Lists
-     ((assoc style wolfram-nb-list-styles)
-      (let* ((level (cdr (assoc style wolfram-nb-list-styles)))
-             (indent (make-string (* (1- level) 2) ?\s)))
-        (format "%s- %s\n"
+     ((or (assoc style wolfram-nb-list-styles)
+          (assoc style wolfram-nb-numbered-list-styles))
+      (let* ((numbered (assoc style wolfram-nb-numbered-list-styles))
+             (level (cdr (or numbered (assoc style wolfram-nb-list-styles))))
+             (indent (make-string (* (1- level) 2) ?\s))
+             (bullet (if numbered "1. " "- ")))
+        (format "%s%s%s\n"
                 indent
-                (replace-regexp-in-string "\\`[•●◦-][ \t]*" "" content))))
+                bullet
+                (replace-regexp-in-string "\\`[•●◦-][ \t]*\\|\\`[0-9]+\\.\\s-*" "" content))))
+
+     ;; Blockquotes
+     ((string= style "Quote")
+      (format "#+begin_quote\n%s\n#+end_quote\n\n" content))
 
      ;; Paragraphs
      ((or (string= style "Text") (string= style "ItemParagraph"))
@@ -687,13 +781,13 @@ it is inserted as-is without extra quotes/escaping."
         (lambda (kw)
           (pcase (org-element-property :key kw)
             ("TITLE"
-             (push (wolfram-nb--make-cell-string
-                    (org-element-property :value kw) "Title") cells))
+              (push (wolfram-nb--make-cell-string
+                     (org-element-property :value kw) "Title") cells))
             ("SUBTITLE"
-             (push (wolfram-nb--make-cell-string
-                    (org-element-property :value kw) "Subtitle") cells)))))
+              (push (wolfram-nb--make-cell-string
+                     (org-element-property :value kw) "Subtitle") cells)))))
       ;; Main content
-      (org-element-map tree '(headline paragraph plain-list src-block example-block)
+      (org-element-map tree '(headline paragraph plain-list src-block example-block quote-block table horizontal-rule)
         (lambda (element)
           (pcase (org-element-type element)
             ('headline
@@ -706,31 +800,52 @@ it is inserted as-is without extra quotes/escaping."
                (push (wolfram-nb--make-cell-string title style raw-opts) cells)))
 
             ('paragraph
-             (unless (eq (org-element-type (org-element-property :parent element)) 'item)
-               (let ((text (org-element-interpret-data element)))
-                 (unless (string-blank-p text)
-                   (push (wolfram-nb--make-cell-string text "Text") cells)))))
+             (unless (org-element-lineage element '(item quote-block))
+               (let* ((res (wolfram-nb--org-element-to-textdata element))
+                      (parts (car res))
+                      (rich (cdr res))
+                      (cell-content
+                       (if rich
+                           (format "TextData[{%s}]" (string-join parts ", "))
+                         (string-join parts ""))))
+                 (unless (string-blank-p cell-content)
+                   (push (wolfram-nb--make-cell-string cell-content "Text") cells)))))
 
             ('plain-list
-             (org-element-map element 'item
-               (lambda (item)
-                 (let* ((list-depth
-                         (let ((lvl 0) (p (org-element-property :parent item)))
-                           (while p
-                             (when (eq (org-element-type p) 'plain-list)
-                               (setq lvl (1+ lvl)))
-                             (setq p (org-element-property :parent p)))
-                           lvl))
-                        (style (or (car (rassoc list-depth wolfram-nb-list-styles))
-                                   "Item"))
-                        (text (string-trim
-                               (mapconcat
-                                (lambda (el)
-                                  (if (stringp el) el
-                                    (org-element-interpret-data el)))
-                                (org-element-contents item) ""))))
-                   (unless (string-blank-p text)
-                     (push (wolfram-nb--make-cell-string text style) cells))))))
+             (unless (org-element-lineage element '(item plain-list))
+               (org-element-map element 'item
+                 (lambda (item)
+                   (let* ((list-depth
+                           (let ((lvl 0) (p (org-element-property :parent item)))
+                             (while p
+                               (when (eq (org-element-type p) 'plain-list)
+                                 (setq lvl (1+ lvl)))
+                               (setq p (org-element-property :parent p)))
+                             lvl))
+                          (is-numbered (string-match-p "\\`[0-9]" (or (org-element-property :bullet item) "")))
+                          (style (if is-numbered
+                                     (or (car (rassoc list-depth wolfram-nb-numbered-list-styles)) "ItemNumbered")
+                                   (or (car (rassoc list-depth wolfram-nb-list-styles)) "Item")))
+                          (res (wolfram-nb--org-element-to-textdata item))
+                          (parts (car res))
+                          (rich (cdr res))
+                          (text
+                           (if rich
+                               (format "TextData[{%s}]" (string-join parts ", "))
+                             (string-join parts ""))))
+                     (unless (string-blank-p text)
+                       (push (wolfram-nb--make-cell-string text style) cells)))))))
+
+            ('quote-block
+             (let ((text (string-trim (org-element-interpret-data element))))
+               (push (wolfram-nb--make-cell-string text "Quote") cells)))
+
+            ('table
+             (let ((text (string-trim (org-element-interpret-data element))))
+               (push (wolfram-nb--make-cell-string text "Text") cells)))
+
+            ('horizontal-rule
+             (push (wolfram-nb--make-cell-string "----" "Text") cells))
 
             ('src-block
              (let* ((lang (org-element-property :language element))

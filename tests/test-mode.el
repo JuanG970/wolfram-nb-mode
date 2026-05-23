@@ -639,6 +639,73 @@ Ensures that even with complex options, TextData content is extracted cleanly."
       (delete-file f))))
 
 ;;; =========================================================
+;;; Phase 2: Core Org-Mode Markup Support
+;;; =========================================================
+
+(ert-deftest wolfram-nb-test-phase2-numbered-lists ()
+  "Test numbered lists bidirectional mapping."
+  ;; Cell -> Org
+  (let ((c1 (wolfram-nb--parse-cell "Cell[\"Step 1\", \"ItemNumbered\"]"))
+        (c2 (wolfram-nb--parse-cell "Cell[\"Step 2\", \"SubitemNumbered\"]")))
+    (should (string= (wolfram-nb--cell-to-org c1) "1. Step 1\n"))
+    (should (string= (wolfram-nb--cell-to-org c2) "  1. Step 2\n")))
+  ;; Org -> Cell
+  (let ((cells (wolfram-nb--org-to-cells "1. Bullet One\n  1. Nested One\n")))
+    (should (= (length cells) 2))
+    (should (string-match-p "\"ItemNumbered\"" (car cells)))
+    (should (string-match-p "\"SubitemNumbered\"" (cadr cells)))))
+
+(ert-deftest wolfram-nb-test-phase2-rich-text ()
+  "Test bold, italic, underline, verbatim inline markup."
+  ;; Org -> Cell
+  (let ((cells (wolfram-nb--org-to-cells "Plain *bold* and /italic/ and _under_ and =code=.")))
+    (should (= (length cells) 1))
+    ;; Should generate a TextData wrapper
+    (should (string-match-p "TextData" (car cells)))
+    (should (string-match-p "StyleBox.*Bold" (car cells)))
+    (should (string-match-p "StyleBox.*Italic" (car cells)))
+    (should (string-match-p "StyleBox.*Underlined" (car cells)))
+    (should (string-match-p "StyleBox.*Courier" (car cells))))
+  ;; Cell -> Org
+  (let* ((cell (wolfram-nb--parse-cell "Cell[TextData[{\"Plain \", StyleBox[\"bold\", \"Bold\"], \" and \", StyleBox[\"italic\", \"Italic\"], \" and \", StyleBox[\"under\", \"Underlined\"], \" and \", StyleBox[\"code\", \"Courier\"], \".\"}], \"Text\"]"))
+         (org (wolfram-nb--cell-to-org cell)))
+    (should (string-match-p "\\*bold\\*" org))
+    (should (string-match-p "/italic/" org))
+    (should (string-match-p "_under_" org))
+    (should (string-match-p "=code=" org))))
+
+(ert-deftest wolfram-nb-test-phase2-links ()
+  "Test plain and descriptive links bidirectional preservation."
+  ;; Org -> Cell
+  (let ((cells (wolfram-nb--org-to-cells "Check [[file:img.png]] or [[https://wolfram.com][Wolfram]].")))
+    (should (= (length cells) 1))
+    (should (string-match-p "\\[\\[file:img.png\\]\\]" (car cells)))
+    (should (string-match-p "\\[\\[https:.*Wolfram\\]\\]" (car cells))))
+  ;; Cell -> Org
+  (let* ((cell (wolfram-nb-cell-create
+                :style "Text"
+                :content "Check [[file:img.png]] or [[https://wolfram.com][Wolfram]]."))
+         (org (wolfram-nb--cell-to-org cell)))
+    (should (string-match-p "\\[\\[file:img.png\\]\\]" org))
+    (should (string-match-p "\\[\\[https://wolfram.com\\]\\[Wolfram\\]\\]" org))))
+
+(ert-deftest wolfram-nb-test-phase2-document-blocks ()
+  "Test quotes, tables, and horizontal rules bidirectional support."
+  ;; Org -> Cell
+  (let ((cells (wolfram-nb--org-to-cells "#+begin_quote\nThis is a quote.\n#+end_quote\n\n| Col A | Col B |\n|---|---|\n| 1 | 2 |\n\n-----\n")))
+    (should (= (length cells) 3))
+    (should (string-match-p "\"Quote\"" (car cells)))
+    (should (string-match-p "\"Text\"" (cadr cells)))
+    (should (string-match-p "\"Text\"" (caddr cells)))
+    (should (string-match-p "This is a quote" (car cells)))
+    (should (string-match-p "Col A" (cadr cells)))
+    (should (string-match-p "----" (caddr cells))))
+  ;; Cell -> Org (Quote)
+  (let ((org (wolfram-nb--cell-to-org (wolfram-nb-cell-create :content "Quote text" :style "Quote"))))
+    (should (string-match-p "begin_quote" org))
+    (should (string-match-p "Quote text" org))))
+
+;;; =========================================================
 ;;; Format output
 ;;; =========================================================
 
