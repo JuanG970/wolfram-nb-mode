@@ -129,6 +129,16 @@ When nil, evaluation falls back to wolframscript."
   :type 'string
   :group 'wolfram-nb)
 
+(defcustom wolfram-nb-rasterize-graphics t
+  "Whether to asynchronously rasterize and display raw graphics cells."
+  :type 'boolean
+  :group 'wolfram-nb)
+
+(defcustom wolfram-nb-fold-raw-blocks t
+  "Whether to fold raw/unrecognized blocks by default."
+  :type 'boolean
+  :group 'wolfram-nb)
+
 ;;;; Cell data structure
 
 (cl-defstruct (wolfram-nb-cell (:constructor wolfram-nb-cell-create)
@@ -143,6 +153,9 @@ When nil, evaluation falls back to wolframscript."
 
 (defvar-local wolfram-nb--cells nil
   "List of `wolfram-nb-cell' structs for the current notebook.")
+
+(defvar-local wolfram-nb--overlays nil
+  "List of active visual overlays in the current buffer.")
 
 (defvar-local wolfram-nb--original-file nil
   "Path to the .nb file backing this buffer.")
@@ -975,6 +988,7 @@ Returns t for `write-contents-functions'."
     (setq wolfram-nb--cells nil
           wolfram-nb--cell-count (length cells))
     (force-mode-line-update)
+    (wolfram-nb-apply-buffer-overlays)
     (message "Reparsed: %d cells%s" (length cells)
              (if wolfram-nb--session-raw
                  (format " [session: %s]" wolfram-nb--session-raw)
@@ -1228,9 +1242,11 @@ Uses session if active, otherwise wolframscript."
                   (when (re-search-forward "^#\\+end_example" nil t)
                     (forward-line)
                     (delete-region output-start (point)))))
-              (insert "\n#+begin_example\n"
-                      (wolfram-nb--format-output result)
-                      "\n#+end_example\n")
+              (let ((output-start (point)))
+                (insert "\n#+begin_example\n"
+                        (wolfram-nb--format-output result)
+                        "\n#+end_example\n")
+                (wolfram-nb--render-evaluation-output output-start (point) result))
               (message "Done."))
           (wolfram-nb-eval-error
            (message "Eval error: %s" (cadr err))))))))
@@ -1286,12 +1302,14 @@ Uses session HTTP if active, otherwise wolframscript."
                        (when (re-search-forward "^#\\+end_example" nil t)
                          (forward-line)
                          (delete-region output-start (point)))))
-                   (if error-msg
-                       (message "Async eval error: %s" error-msg)
-                     (insert "\n#+begin_example\n"
-                             (wolfram-nb--format-output result)
-                             "\n#+end_example\n")
-                     (message "Async eval complete."))))
+                    (if error-msg
+                        (message "Async eval error: %s" error-msg)
+                      (let ((output-start (point)))
+                        (insert "\n#+begin_example\n"
+                                (wolfram-nb--format-output result)
+                                "\n#+end_example\n")
+                        (wolfram-nb--render-evaluation-output output-start (point) result))
+                      (message "Async eval complete."))))
                (set-marker end-marker nil))))
         (progn
           (unless (wolfram-nb--check-wolframscript)
@@ -1318,10 +1336,11 @@ Uses session HTTP if active, otherwise wolframscript."
                                     (forward-line)
                                     (delete-region output-start (point)))))
                               (if (= exit-code 0)
-                                  (progn
+                                  (let ((output-start (point)))
                                     (insert "\n#+begin_example\n"
                                             (wolfram-nb--format-output output)
                                             "\n#+end_example\n")
+                                    (wolfram-nb--render-evaluation-output output-start (point) output)
                                     (message "Async eval complete."))
                                 (message "Async eval error: %s" output))))
                           (set-marker end-marker nil))))))))
@@ -1449,6 +1468,155 @@ Interactively prompts for the value."
       (wolfram-nb-eval-error
        (message "Session ping failed: %s" (cadr err))))))
 
+;;;; Visual Overlays & Inline Previews (Features 1 - 3)
+
+(defun wolfram-nb-clear-overlays ()
+  "Remove all active visual overlays in the current buffer."
+  (interactive)
+  (dolist (ov wolfram-nb--overlays)
+    (when (overlayp ov)
+      (delete-overlay ov)))
+  (setq wolfram-nb--overlays nil))
+
+(defun wolfram-nb--rasterize-async (content callback)
+  "Asynchronously rasterize Wolfram CONTENT string and execute CALLBACK.
+The CALLBACK is called with (PNG-FILE ERROR-MSG) when completed."
+  (unless (wolfram-nb--check-wolframscript)
+    (funcall callback nil "wolframscript not found"))
+  (let* ((temp-content-file (make-temp-file "wolfram-nb-content" nil ".txt"))
+         (temp-png-file (make-temp-file "wolfram-nb-img" nil ".png"))
+         (buf (current-buffer)))
+    ;; Write content to temporary file to avoid shell command-line length limits or escaping issues
+    (with-temp-file temp-content-file
+      (insert content))
+    (let* ((code (format "Quiet[Export[%S, Rasterize[ToExpression[Import[%S, \"Text\"]], ImageResolution -> 72], \"PNG\"]]"
+                         temp-png-file temp-content-file))
+           (proc (make-process
+                  :name "wolfram-rasterize-async"
+                  :buffer (generate-new-buffer " *wolfram-rasterize*")
+                  :command (list wolfram-nb-wolframscript-path "-code" code)
+                  :sentinel
+                  (lambda (process _event)
+                    (when (memq (process-status process) '(exit signal))
+                      (let ((exit-status (process-exit-status process)))
+                        (kill-buffer (process-buffer process))
+                        (when (file-exists-p temp-content-file)
+                          (delete-file temp-content-file))
+                        (when (buffer-live-p buf)
+                          (with-current-buffer buf
+                            (if (= exit-status 0)
+                                (funcall callback temp-png-file nil)
+                              (when (file-exists-p temp-png-file)
+                                (delete-file temp-png-file))
+                              (funcall callback nil "Rasterization failed"))))))))))
+      proc)))
+
+(defun wolfram-nb-toggle-block-at-point ()
+  "Toggle the folded/expanded state of the block overlay at point."
+  (interactive)
+  (let ((ovs (overlays-at (point)))
+        (found nil))
+    (dolist (ov ovs)
+      (when (overlay-get ov 'wolfram-nb-fold)
+        (setq found t)
+        (let ((folded (overlay-get ov 'folded))
+              (preview-ov (overlay-get ov 'preview-overlay)))
+          (if folded
+              ;; Expand
+              (progn
+                (overlay-put ov 'folded nil)
+                (overlay-put ov 'display nil)
+                (when preview-ov
+                  (overlay-put preview-ov 'invisible nil)))
+            ;; Collapse
+            (progn
+              (overlay-put ov 'folded t)
+              (overlay-put ov 'display " 🖼️  [Raw Graphics Block - Click to Expand / TAB]\n")
+              (when preview-ov
+                (overlay-put preview-ov 'invisible t)))))))
+    (unless found
+      (message "No block overlay at point"))))
+
+(defun wolfram-nb-apply-buffer-overlays ()
+  "Scan the buffer for raw/unrecognized blocks and apply overlays."
+  (interactive)
+  (wolfram-nb-clear-overlays)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward "^#\\+begin_src wolfram-raw\n" nil t)
+      (let* ((block-start (match-beginning 0))
+             (content-start (match-end 0)))
+        (when (re-search-forward "^#\\+end_src\n?" nil t)
+          (let* ((block-end (point))
+                 (content-end (match-beginning 0))
+                 (content (buffer-substring-no-properties content-start content-end))
+                 (fold-ov (make-overlay block-start block-end)))
+            (overlay-put fold-ov 'wolfram-nb-fold t)
+            (overlay-put fold-ov 'folded wolfram-nb-fold-raw-blocks)
+            (when wolfram-nb-fold-raw-blocks
+              (overlay-put fold-ov 'display " 🖼️  [Raw Graphics Block - Click to Expand / TAB]\n"))
+            (overlay-put fold-ov 'evaporate t)
+            (overlay-put fold-ov 'face 'highlight)
+            (let ((map (make-sparse-keymap)))
+              (define-key map [mouse-1] #'wolfram-nb-toggle-block-at-point)
+              (define-key map (kbd "RET") #'wolfram-nb-toggle-block-at-point)
+              (define-key map (kbd "TAB") #'wolfram-nb-toggle-block-at-point)
+              (overlay-put fold-ov 'keymap map))
+            (push fold-ov wolfram-nb--overlays)
+
+            ;; If it contains graphical constructs, trigger asynchronous rasterization
+            (when (and wolfram-nb-rasterize-graphics
+                       (string-match-p "BoxData\\|Graphics\\|Raster\\|Image\\|DynamicModule" content))
+              (let ((preview-ov (make-overlay (1- block-end) block-end)))
+                (overlay-put preview-ov 'wolfram-nb-preview t)
+                (when wolfram-nb-fold-raw-blocks
+                  (overlay-put preview-ov 'invisible t))
+                (overlay-put preview-ov 'evaporate t)
+                (overlay-put fold-ov 'preview-overlay preview-ov)
+                (push preview-ov wolfram-nb--overlays)
+
+                (wolfram-nb--rasterize-async
+                 content
+                 (lambda (png-path err)
+                   (if err
+                       (message "Rasterization warning: %s" err)
+                     (when (file-exists-p png-path)
+                       (let* ((img (create-image png-path 'png nil :max-width 600))
+                              (display-spec (append (list 'margin nil) (list img) '("\n"))))
+                         (overlay-put preview-ov 'display display-spec))))))))))))))
+
+(defun wolfram-nb--render-evaluation-output (start end result)
+  "Render evaluation RESULT inline as an overlay from START to END if graphical."
+  (when (and wolfram-nb-rasterize-graphics
+             (string-match-p "\\`\\(Graphics\\|Graphics3D\\|Image\\|Show\\|Plot\\|ContourPlot\\|DensityPlot\\|BarChart\\|PieChart\\)\\s-*\\[" (string-trim result)))
+    (let ((result-ov (make-overlay start end)))
+      (overlay-put result-ov 'wolfram-nb-result t)
+      (overlay-put result-ov 'evaporate t)
+      (push result-ov wolfram-nb--overlays)
+      (wolfram-nb--rasterize-async
+       result
+       (lambda (png-path err)
+         (if err
+             (message "Evaluation rasterization warning: %s" err)
+           (when (file-exists-p png-path)
+             (let* ((img (create-image png-path 'png nil :max-width 600))
+                    (display-spec (append (list 'margin nil) (list img) '("\n"))))
+               (overlay-put result-ov 'display display-spec)
+               ;; Click to toggle raw text output
+               (let ((map (make-sparse-keymap)))
+                 (define-key map [mouse-1] (lambda () (interactive) (overlay-put result-ov 'display (if (overlay-get result-ov 'display) nil display-spec))))
+                 (overlay-put result-ov 'keymap map))))))))))
+
+(defun wolfram-nb-toggle-overlays ()
+  "Toggle the visual overlays on/off in the current buffer."
+  (interactive)
+  (if wolfram-nb--overlays
+      (progn
+        (wolfram-nb-clear-overlays)
+        (message "Visual overlays cleared."))
+    (wolfram-nb-apply-buffer-overlays)
+    (message "Visual overlays applied.")))
+
 ;;;; Keymap
 
 (defvar wolfram-nb-mode-map
@@ -1462,6 +1630,7 @@ Interactively prompts for the value."
     (define-key map (kbd "C-c C-n") #'wolfram-nb-insert-src-block)
     (define-key map (kbd "C-c C-s") #'wolfram-nb-set-session)
     (define-key map (kbd "C-c C-p") #'wolfram-nb-session-ping)
+    (define-key map (kbd "C-c C-o") #'wolfram-nb-toggle-overlays)
     (define-key map (kbd "C-x C-s") #'wolfram-nb-save)
     map)
   "Keymap for `wolfram-nb-mode'.")
@@ -1502,6 +1671,7 @@ Cell[...] structure for serialization back to Notebook format.
       (setq wolfram-nb--cells cells
             wolfram-nb--cell-count (length cells))
       (wolfram-nb--refresh-session)
+      (wolfram-nb-apply-buffer-overlays)
       (message "Opened %s (%d cells)%s"
                (file-name-nondirectory file) wolfram-nb--cell-count
                (if wolfram-nb--session-raw

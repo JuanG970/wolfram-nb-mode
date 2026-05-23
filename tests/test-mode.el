@@ -739,6 +739,40 @@ Ensures that even with complex options, TextData content is extracted cleanly."
       (should (string-match-p "MyCustomStyle" (car (car index)))))))
 
 ;;; =========================================================
+;;; Visual Overlays & Inline Previews
+;;; =========================================================
+
+(ert-deftest wolfram-nb-test-overlays-folding-and-toggling ()
+  "Test raw block folding overlay creation and toggling."
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (insert "#+begin_src wolfram-raw\nBoxData[SomeGraphicsBox[]]\n#+end_src\n")
+    ;; Apply overlays
+    (wolfram-nb-apply-buffer-overlays)
+    (should (= (length wolfram-nb--overlays) 2)) ;; 1 fold overlay + 1 preview overlay
+    
+    ;; Verify fold overlay is folded by default
+    (let ((fold-ov (car (cl-member-if (lambda (ov) (overlay-get ov 'wolfram-nb-fold)) wolfram-nb--overlays)))
+          (preview-ov (car (cl-member-if (lambda (ov) (overlay-get ov 'wolfram-nb-preview)) wolfram-nb--overlays))))
+      (should fold-ov)
+      (should (overlay-get fold-ov 'folded))
+      (should (overlay-get fold-ov 'display))
+      (should (overlay-get preview-ov 'invisible))
+      
+      ;; Toggle fold
+      (goto-char (overlay-start fold-ov))
+      (wolfram-nb-toggle-block-at-point)
+      
+      ;; Verify expanded
+      (should-not (overlay-get fold-ov 'folded))
+      (should-not (overlay-get fold-ov 'display))
+      (should-not (overlay-get preview-ov 'invisible)))
+    
+    ;; Clear overlays
+    (wolfram-nb-clear-overlays)
+    (should-not wolfram-nb--overlays)))
+
+;;; =========================================================
 ;;; =========================================================
 ;;; Stress / performance
 ;;; =========================================================
