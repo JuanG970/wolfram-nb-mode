@@ -388,6 +388,19 @@ Returns the options string (without leading comma) or nil."
         (when (string-match "\\`[ \t\n]*,[ \t\n]*" rest)
           (string-trim (substring rest (match-end 0))))))))
 
+(defun wolfram-nb--parse-attr-wolfram (attr)
+  "Parse style and options from ATTR string.
+ATTR is a string like \":style \\\"StyleName\\\" :options \\\"options\\\"\".
+Returns a cons cell (style . options)."
+  (let ((style "Text")
+        (options nil))
+    (when attr
+      (when (string-match ":style[ \t\n]*\"\\([^\"]*\\)\"" attr)
+        (setq style (match-string 1 attr)))
+      (when (string-match ":options[ \t\n]*\"\\([^\"\\\\]*\\(?:\\\\\\(?:.\\|\n\\)[^\"\\\\]*\\)*\\)\"" attr)
+        (setq options (wolfram-nb--unescape-string (match-string 1 attr)))))
+    (cons style options)))
+
 (defun wolfram-nb--parse-cell (cell-string)
   "Parse a single Cell[...] structure from CELL-STRING.
 Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
@@ -448,6 +461,52 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
          :style style
          :options options
          :raw-options raw-options))))
+
+   ;; Fallback/General parser for any unrecognized Cell[...] structure
+   ((string-match "\\`Cell\\[" cell-string)
+    (let* ((trimmed-cell (string-trim cell-string))
+           (inner-args (and (string-prefix-p "Cell[" trimmed-cell)
+                            (string-suffix-p "]" trimmed-cell)
+                            (substring trimmed-cell 5 -1)))
+           (args (and inner-args (wolfram-nb--split-args inner-args))))
+      (when args
+        (let* ((arg1 (nth 0 args))
+               (arg2 (nth 1 args))
+               (style "Text")
+               (raw-options nil)
+               (content "")
+               (options nil))
+          ;; Determine style and raw-options
+          (cond
+           ;; Case 1: arg2 exists and is a quoted string -> it is the style
+           ((and arg2 (string-prefix-p "\"" arg2) (string-suffix-p "\"" arg2))
+            (setq style (substring arg2 1 -1))
+            (when (> (length args) 2)
+              (setq raw-options (string-join (nthcdr 2 args) ", "))))
+           ;; Case 2: arg2 exists but is not a quoted string -> arg2 is an option, style defaults
+           (arg2
+            (setq style (if (string-prefix-p "BoxData[" arg1) "Input" "Text"))
+            (setq raw-options (string-join (nthcdr 1 args) ", ")))
+           ;; Case 3: arg2 does not exist -> style defaults, no options
+           (t
+            (setq style (if (string-prefix-p "BoxData[" arg1) "Input" "Text"))))
+
+          ;; Determine content
+          (cond
+           ((and (string-prefix-p "\"" arg1) (string-suffix-p "\"" arg1))
+            (setq content (wolfram-nb--unescape-string (substring arg1 1 -1))))
+           (t
+            (setq content arg1)))
+
+          ;; Extract options
+          (when (and raw-options (string-match "CellLabel->\"\\([^\"]*\\)\"" raw-options))
+            (push (cons 'cell-label (match-string 1 raw-options)) options))
+
+          (wolfram-nb-cell-create
+           :content content
+           :style style
+           :options options
+           :raw-options raw-options)))))
 
    ;; Unknown/invalid
    (t nil)))
@@ -582,7 +641,10 @@ When called from a `wolfram-nb-mode' buffer, also sets
 
      ;; Fallback
      (t
-      (format "# [%s] %s\n\n" style content)))))
+      (format "#+ATTR_WOLFRAM: :style \"%s\"%s\n#+begin_src wolfram-raw\n%s\n#+end_src\n\n"
+              style
+              (if raw-opts (format " :options \"%s\"" (wolfram-nb--escape-string raw-opts)) "")
+              content)))))
 
 (defun wolfram-nb--cells-to-org (cells)
   "Convert a list of `wolfram-nb-cell' CELLS to Org-mode text."
@@ -597,11 +659,11 @@ When called from a `wolfram-nb-mode' buffer, also sets
 (defun wolfram-nb--make-cell-string (content style &optional raw-options)
   "Create a Cell[...] string with CONTENT and STYLE.
 RAW-OPTIONS, if provided, is appended after the style.
-If CONTENT looks like raw BoxData (starts with \"BoxData[\"),
+If CONTENT looks like raw BoxData/TextData/RawData/DynamicModuleBox,
 it is inserted as-is without extra quotes/escaping."
   (let* ((trimmed (string-trim content))
          (final-content
-          (if (string-prefix-p "BoxData[" trimmed)
+          (if (string-match-p "\\`\\(BoxData\\|TextData\\|RawData\\|DynamicModuleBox\\)\\s-*\\[" trimmed)
               trimmed
             (concat "\"" (wolfram-nb--escape-string trimmed) "\""))))
     (if raw-options
@@ -674,17 +736,30 @@ it is inserted as-is without extra quotes/escaping."
              (let* ((lang (org-element-property :language element))
                     (value (org-element-property :value element))
                     (name (org-element-property :name element))
-                    (raw-opts (car (org-element-property :attr_wolfram element)))
-                    (final-opts (if name
-                                    (if raw-opts
-                                        (format "%s, CellLabel->\"%s\"" raw-opts name)
-                                      (format "CellLabel->\"%s\"" name))
-                                  raw-opts)))
-               (push (wolfram-nb--make-cell-string
-                      value
-                      (if (and lang (string= lang "wolfram")) "Input" "Code")
-                      final-opts)
-                     cells)))
+                    (raw-opts-list (org-element-property :attr_wolfram element))
+                    (raw-opts (and raw-opts-list (car raw-opts-list))))
+               (cond
+                ((string= lang "wolfram-raw")
+                 (let* ((parsed-attr (wolfram-nb--parse-attr-wolfram raw-opts))
+                        (style (car parsed-attr))
+                        (opts (cdr parsed-attr))
+                        (final-opts (if name
+                                        (if opts
+                                            (format "%s, CellLabel->\"%s\"" opts name)
+                                          (format "CellLabel->\"%s\"" name))
+                                      opts)))
+                   (push (wolfram-nb--make-cell-string value style final-opts) cells)))
+                (t
+                 (let ((final-opts (if name
+                                       (if raw-opts
+                                           (format "%s, CellLabel->\"%s\"" raw-opts name)
+                                         (format "CellLabel->\"%s\"" name))
+                                     raw-opts)))
+                   (push (wolfram-nb--make-cell-string
+                          value
+                          (if (and lang (string= lang "wolfram")) "Input" "Code")
+                          final-opts)
+                         cells))))))
 
             ('example-block
              (let* ((value (org-element-property :value element))

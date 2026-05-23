@@ -190,11 +190,25 @@ The Mathematica string \\\\\\\\n means backslash-backslash-n, not backslash-newl
   "CellGroupData wrappers return nil from parse-cell."
   (should-not (wolfram-nb--parse-cell "Cell[CellGroupData[{...}]]")))
 
+(defun wolfram-nb-cell-p (obj)
+  "Return non-nil if OBJ is a `wolfram-nb-cell` struct."
+  (cl-typep obj 'wolfram-nb-cell))
+
 (ert-deftest wolfram-nb-test-parse-cell-invalid ()
   "Invalid strings return nil."
   (should-not (wolfram-nb--parse-cell "not a cell"))
-  (should-not (wolfram-nb--parse-cell ""))
-  (should-not (wolfram-nb--parse-cell "Cell[123, \"Text\"]")))
+  (should-not (wolfram-nb--parse-cell "")))
+
+(ert-deftest wolfram-nb-test-parse-cell-fallback ()
+  "Test fallback/robust parsing of unrecognized cell formats."
+  (let ((c (wolfram-nb--parse-cell "Cell[123, \"Text\"]")))
+    (should c)
+    (should (string= (wolfram-nb-cell-content c) "123"))
+    (should (string= (wolfram-nb-cell-style c) "Text")))
+  (let ((c (wolfram-nb--parse-cell "Cell[SomeHead[foo, bar], \"MyCustomStyle\"]")))
+    (should c)
+    (should (string= (wolfram-nb-cell-content c) "SomeHead[foo, bar]"))
+    (should (string= (wolfram-nb-cell-style c) "MyCustomStyle"))))
 
 (ert-deftest wolfram-nb-test-parse-cell-dynamic ()
   "DynamicModuleBox returns Output placeholder."
@@ -451,10 +465,12 @@ Ensures that even with complex options, TextData content is extracted cleanly."
     (should (string-match-p "4" org))))
 
 (ert-deftest wolfram-nb-test-cell-to-org-unknown ()
-  "Unknown styles produce a comment."
+  "Unknown styles produce a wolfram-raw source block fallback."
   (let ((org (wolfram-nb--cell-to-org
               (wolfram-nb-cell-create :content "mystery" :style "WeirdStyle"))))
-    (should (string-match-p "^# \\[WeirdStyle\\]" org))))
+    (should (string-match-p "#\\+ATTR_WOLFRAM: :style \"WeirdStyle\"" org))
+    (should (string-match-p "begin_src wolfram-raw" org))
+    (should (string-match-p "mystery" org))))
 
 (ert-deftest wolfram-nb-test-cells-to-org-multiple ()
   (let* ((cells (list (wolfram-nb-cell-create :content "Sec" :style "Section")
@@ -518,6 +534,13 @@ Ensures that even with complex options, TextData content is extracted cleanly."
   (let ((cells (wolfram-nb--org-to-cells "#+begin_example\n4\n#+end_example\n")))
     (should (= (length cells) 1))
     (should (string-match-p "\"Output\"" (car cells)))))
+
+(ert-deftest wolfram-nb-test-org-to-cells-raw-fallback ()
+  "Test parsing wolfram-raw src blocks back to cells with custom styles and options."
+  (let ((cells (wolfram-nb--org-to-cells
+                "#+ATTR_WOLFRAM: :style \"CustomStyle\" :options \"CellLabel->\\\"1\\\"\"\n#+begin_src wolfram-raw\nBoxData[GraphicsBox[Circle[]]]\n#+end_src\n")))
+    (should (= (length cells) 1))
+    (should (string-match-p "Cell\\[BoxData\\[GraphicsBox\\[Circle\\[\\]\\]\\], \"CustomStyle\", CellLabel->\"1\"\\]" (car cells)))))
 
 (ert-deftest wolfram-nb-test-org-to-cells-items ()
   (let ((cells (wolfram-nb--org-to-cells "- A\n- B\n- C\n")))
