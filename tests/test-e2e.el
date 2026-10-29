@@ -61,6 +61,10 @@ With OWN the buffer gets a kernel of its own, which dies with the buffer.
 Otherwise it uses the shared kernel, after resetting its definitions."
   (if own
       (progn
+        ;; A licence may allow only two processes, and a kernel that has drawn
+        ;; a plot holds both, so the shared kernel has to go first.
+        (when (wolfram-nb-kernel-live-p wolfram-nb-e2e--shared-kernel)
+          (wolfram-nb-kernel-stop wolfram-nb-e2e--shared-kernel))
         (setq wolfram-nb--kernel (wolfram-nb-e2e--start-kernel))
         (add-hook 'kill-buffer-hook #'wolfram-nb-kernel-quit nil t))
     (unless (wolfram-nb-kernel-live-p wolfram-nb-e2e--shared-kernel)
