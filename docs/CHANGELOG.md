@@ -45,7 +45,7 @@ mode and having the kernel compare the original with the saved file:
   `[[links]]`; `\[Dash]`-style character escapes had their backslash doubled
 - Rich text: a space inside an italic span stopped it being italic, a trailing
   newline was added on every save, hyperlinks and inline cells were dumped as
-  raw Wolfram code (they are now kept as `⟦wnb:N⟧` tokens and put back), and
+  raw Wolfram code (they are now kept as `[wnb:N]` tokens and put back), and
   bold text in a headline lost its formatting
 - Nested list items (`Item`, `Subitem`, `Subsubitem`) each repeated the text of
   their sub-items
@@ -82,6 +82,30 @@ mode and having the kernel compare the original with the saved file:
   lost because the match data was read after other calls overwrote it
 - `wolfram-nb-eval-buffer` used stale positions after the first output was
   inserted
+- Second fuzz round (rich text judged by the kernel, mixed notebooks, group
+  tests of at least 3000 cases per cell style), all pinned in
+  `tests/test-edge.el`:
+  - a backslash followed by a character that Org or the file format treats as
+    an escape (`\\`, `\"`, `\[`) came back changed; an escaped backslash that
+    cannot be told apart from the text after it is marked internally and the
+    mark is dropped on write and before evaluation
+  - two styled spans that touched (`**a**/b/`) merged or lost their style; a
+    zero-width separator now keeps them apart in the cell
+  - an inline cell or link next to a URL, a `\begin{...}` or a `=verbatim=`
+    string was read as part of the text, leaving a `[wnb:N]` token in the saved
+    cell
+  - an indented `#+begin_src` in one cell was closed by the `#+end_src` of a
+    later cell, swallowing the cells in between
+  - evaluation sent a literal `\` + mark to the kernel when a code cell
+    contained the internal backslash mark
+  - a paragraph starting with `#`, `:word:` at the end of a line, or
+    `\begin{` / `\end{` changed the kind of cell
+- Known limits: trailing blanks of an edited headline are trimmed; literal
+  markup in a plain-string headline is read as formatting once the cell is
+  edited; in an edited rich cell, styling other than bold, italic, underline
+  and Courier is dropped; a tab after an Org object becomes a space; the
+  `CellGroupData` nesting is flattened on save; Emacs 28.2 (the CI version)
+  has not been run
 
 ### Changed
 - Reorganized repository structure following Emacs package best practices

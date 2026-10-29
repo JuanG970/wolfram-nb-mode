@@ -251,8 +251,24 @@ Org reads the depth of an item from the item before it.  The value is
 
 ;;;; String escaping (fast, using replace-regexp-in-string)
 
-(defun wolfram-nb--unescape-string (str)
+(defconst wolfram-nb--character-escape-regexp
+  (concat "\\\\\\(?:\\[[A-Za-z][A-Za-z0-9]*\\]"      ; \[Alpha]
+          "\\|:[0-9A-Fa-f]\\{4\\}\\|\\.[0-9A-Fa-f]\\{2\\}"  ; \:03b1 \.e9
+          "\\||[0-9A-Fa-f]\\{6\\}\\|[0-7]\\{3\\}"     ; \|01d4b6 \101
+          "\\|[!()*/^_@&%+$]\\)")                      ; linear syntax \! \( \)
+  "Escapes of a Wolfram string that are kept as they are.
+The Wolfram parser reads them as single characters, so they must not have
+their backslash doubled when the string is written back.")
+
+(defconst wolfram-nb--escaped-backslash-mark "\u200c"
+  "Follows a backslash that was written as `\\\\' where a single one would
+have been read as a character escape such as `\\[Alpha]'.  It is dropped when
+the string is written back, which tells the two readings apart.")
+
+(defun wolfram-nb--unescape-string (str &optional mark-end)
   "Convert escaped Mathematica string STR to Emacs Lisp string.
+With MARK-END, a backslash at the very end is marked too, because text that
+is joined on after it could turn it into the start of a character escape.
 Handles \\\\, \\\", \\n, and \\t sequences in a single pass.
 Also strips long-string markers \\< and \\> if present, and handles line continuations."
   (let* ((clean (if (string-prefix-p "\\<" str)
@@ -267,40 +283,61 @@ Also strips long-string markers \\< and \\> if present, and handles line continu
                             (= (% k 2) 1)))
                      (substring clean 0 -2)
                    clean)))
-    ;; Remove line continuations (backslash followed by optional whitespace and newline)
-    (setq clean2 (replace-regexp-in-string "\\\\[ \t]*\n" "" clean2))
+    ;; Remove line continuations: a backslash, blanks and a newline.  A pair of
+    ;; backslashes is an escaped backslash and is left alone.
+    (setq clean2
+          (let ((out nil) (i 0) (n (length clean2)))
+            (while (< i n)
+              (let ((c (aref clean2 i)))
+                (cond
+                 ((and (eq c ?\\) (< (1+ i) n) (eq (aref clean2 (1+ i)) ?\\))
+                  (push c out) (push c out) (setq i (+ i 2)))
+                 ((and (eq c ?\\) (string-match "[ \t]*\n" clean2 (1+ i))
+                       (= (match-beginning 0) (1+ i)))
+                  (setq i (match-end 0)))
+                 (t (push c out) (setq i (1+ i))))))
+            (apply #'string (nreverse out))))
     ;; Trim leading/trailing newlines/whitespace if it was a long string
     (when (or (string-prefix-p "\\<" str) (string-suffix-p "\\>" str))
       (setq clean2 (string-trim clean2)))
-    (replace-regexp-in-string
-     "\\\\\\([\\\\\"nt]\\)"
-     (lambda (match)
-       (pcase (aref match 1)
-         (?\\  "\\")
-         (?\"  "\"")
-         (?n   "\n")
-         (?t   "\t")
-         (_    (substring match 1))))
-     clean2 nil t)))
-
-(defconst wolfram-nb--character-escape-regexp
-  (concat "\\\\\\(?:\\[[A-Za-z][A-Za-z0-9]*\\]"      ; \[Alpha]
-          "\\|:[0-9A-Fa-f]\\{4\\}\\|\\.[0-9A-Fa-f]\\{2\\}"  ; \:03b1 \.e9
-          "\\||[0-9A-Fa-f]\\{6\\}\\|[0-7]\\{3\\}"     ; \|01d4b6 \101
-          "\\|[!()*/^_@&%+$]\\)")                      ; linear syntax \! \( \)
-  "Escapes of a Wolfram string that are kept as they are.
-The Wolfram parser reads them as single characters, so they must not have
-their backslash doubled when the string is written back.")
+    ;; Decode \\, \", \n and \t, drop line continuations, and leave every other
+    ;; escape (\[Alpha], \:03b1, ...) as it is.
+    (let ((out nil) (i 0) (n (length clean2)))
+      (while (< i n)
+        (let ((c (aref clean2 i)))
+          (if (or (not (eq c ?\\)) (= (1+ i) n))
+              (progn (push c out) (setq i (1+ i)))
+            (let ((next (aref clean2 (1+ i))))
+              (cond
+               ((eq next ?\\)
+                (push ?\\ out)
+                ;; a literal backslash that a reader would take for the start
+                ;; of a character escape gets a mark so that it can be told
+                ;; ... or that ends the string, since text may follow it
+                (when (or (and mark-end (= (+ i 2) n))
+                          (and (string-match wolfram-nb--character-escape-regexp
+                                             clean2 (1+ i))
+                               (= (match-beginning 0) (1+ i))))
+                  (push (aref wolfram-nb--escaped-backslash-mark 0) out))
+                (setq i (+ i 2)))
+               ((eq next ?\") (push ?\" out) (setq i (+ i 2)))
+               ((eq next ?n) (push ?\n out) (setq i (+ i 2)))
+               ((eq next ?t) (push ?\t out) (setq i (+ i 2)))
+               (t (push c out) (setq i (1+ i))))))))
+      (apply #'string (nreverse out)))))
 
 (defun wolfram-nb--escape-string (str)
   "Escape STR for inclusion in a Mathematica string literal.
 Handles backslash, double-quote, newline, and tab in a single pass.  A
 backslash that starts a character escape such as `\\[Alpha]' is kept."
   (replace-regexp-in-string
-   (concat wolfram-nb--character-escape-regexp "\\|[\\\\\"\n\t]")
+   (concat wolfram-nb--character-escape-regexp
+           "\\|\\\\" wolfram-nb--escaped-backslash-mark "\\|[\\\\\"\n\t]")
    (lambda (match)
      (if (> (length match) 1)
-         match
+         (if (string-suffix-p wolfram-nb--escaped-backslash-mark match)
+             "\\\\"
+           match)
        (pcase (aref match 0)
          (?\\ "\\\\")
          (?\" "\\\"")
@@ -394,14 +431,14 @@ Returns a list of strings."
       (push (string-trim (buffer-substring-no-properties start (point))) parts)
       (nreverse parts))))
 
-(defconst wolfram-nb--opaque-regexp "⟦wnb:\\([0-9]+\\)⟧"
+(defconst wolfram-nb--opaque-regexp "\\[wnb:\\([0-9]+\\)\\]"
   "Matches the text that stands for an inline box kept as it was.")
 
 (defvar wolfram-nb--parse-opaque nil
   "While a notebook is parsed, the hash table collecting inline boxes.")
 
 (defvar-local wolfram-nb--opaque-parts nil
-  "Hash table from the number in a ⟦wnb:N⟧ token to the box it stands for.
+  "Hash table from the number in a [wnb:N] token to the box it stands for.
 Inline boxes that Org cannot show, such as hyperlinks and inline cells, are
 replaced by a token in the text and put back when the notebook is saved.")
 
@@ -411,7 +448,7 @@ replaced by a token in the text and put back when the notebook is saved.")
       part
     (let ((id (number-to-string (1+ (hash-table-count wolfram-nb--parse-opaque)))))
       (puthash id part wolfram-nb--parse-opaque)
-      (format "⟦wnb:%s⟧" id))))
+      (format "[wnb:%s]" id))))
 
 (defun wolfram-nb--styled-text (marker text)
   "Return TEXT wrapped in MARKER, with surrounding blanks left outside.
@@ -423,6 +460,29 @@ Org does not read `/ word/' as emphasis, so the blanks must not be inside."
         text
       (concat lead marker core marker trail))))
 
+(defun wolfram-nb--join-text (result text styled after-span)
+  "Append TEXT to RESULT, the text read so far from a TextData.
+Org reads emphasis only between blanks or punctuation, so a zero-width space,
+which Org takes for a blank and which is removed when saving, is put between a
+styled span and a neighbour that touches it.  STYLED says TEXT is a span and
+AFTER-SPAN that RESULT ends with one."
+  (cond
+   ((string-empty-p text) result)
+   ((string-empty-p result) text)
+   (t
+    (let ((last (aref result (1- (length result))))
+          (first (aref text 0)))
+      (concat result
+              (if (cond
+                   (styled
+                    (not (memq last '(?\s ?\t ?\n ?\( ?' ?\" ?{ ?- ?\u200b))))
+                   (after-span
+                    (not (memq first '(?\s ?\t ?\n ?- ?. ?, ?: ?! ?? ?\; ?' ?\" ?\)
+                                       ?} ?\\ ?\[ ?\u200b)))))
+                  "\u200b"
+                "")
+              text)))))
+
 (defun wolfram-nb--parse-textdata-content (content)
   "Parse TextData CONTENT (a string inside TextData[{...}] or TextData[...]).
 Handles StyleBox for Bold/Italic formatting."
@@ -433,40 +493,40 @@ Handles StyleBox for Bold/Italic formatting."
                content) ;; Should not happen if well-formed
            content)))
     (let ((parts (wolfram-nb--split-args inner-content))
-          (result ""))
-      (dolist (part parts)
-        (cond
-         ;; String literal
-         ((string-prefix-p "\"" part)
-          (setq result (concat result (wolfram-nb--unescape-string (substring part 1 -1)))))
-         ;; StyleBox
-         ((string-prefix-p "StyleBox[" part)
-          (let ((text (wolfram-nb--extract-head-argument part "StyleBox"))
-                (style-part (substring part (length "StyleBox["))))
-            (if (not (and text (or (string-prefix-p "\"" text)
-                                   (string-prefix-p "{" text))))
-                ;; Not text inside: keep the whole box as it is.
-                (setq result (concat result (wolfram-nb--opaque-token part)))
-              (let ((clean-text (if (string-prefix-p "{" text)
-                                    (wolfram-nb--parse-textdata-content text)
-                                  (wolfram-nb--unescape-string (substring text 1 -1)))))
-                ;; Check for Bold/Italic in the rest of the StyleBox
-                (cond
-                 ((string-match-p "\"Bold\"" style-part)
-                  (setq result (concat result (wolfram-nb--styled-text "*" clean-text))))
-                 ((string-match-p "\"Italic\"" style-part)
-                  (setq result (concat result (wolfram-nb--styled-text "/" clean-text))))
-                 ((string-match-p "\"Underlined\"" style-part)
-                  (setq result (concat result (wolfram-nb--styled-text "_" clean-text))))
-                 ((string-match-p "\"Courier\"" style-part)
-                  (setq result (concat result (wolfram-nb--styled-text "=" clean-text))))
-                 (t
-                  (setq result (concat result clean-text))))))))
-         ;; Any other inline box (a link, an inline cell, ...): keep it as it is
-         (t
-          (setq result (concat result (wolfram-nb--opaque-token part))))))
+          (result "")
+          (after-span nil))
+      (cl-flet ((add (text &optional styled)
+                  (setq result (wolfram-nb--join-text result text styled after-span)
+                        after-span styled)))
+        (dolist (part parts)
+          (cond
+           ;; String literal
+           ((string-prefix-p "\"" part)
+            (add (wolfram-nb--unescape-string (substring part 1 -1) t)))
+           ;; StyleBox
+           ((string-prefix-p "StyleBox[" part)
+            (let ((text (wolfram-nb--extract-head-argument part "StyleBox"))
+                  (style-part (substring part (length "StyleBox["))))
+              (if (not (and text (or (string-prefix-p "\"" text)
+                                     (string-prefix-p "{" text))))
+                  ;; Not text inside: keep the whole box as it is.
+                  (add (wolfram-nb--opaque-token part))
+                (let ((clean-text (if (string-prefix-p "{" text)
+                                      (wolfram-nb--parse-textdata-content text)
+                                    (wolfram-nb--unescape-string (substring text 1 -1) t))))
+                  (cond
+                   ((string-match-p "\"Bold\"" style-part)
+                    (add (wolfram-nb--styled-text "*" clean-text) t))
+                   ((string-match-p "\"Italic\"" style-part)
+                    (add (wolfram-nb--styled-text "/" clean-text) t))
+                   ((string-match-p "\"Underlined\"" style-part)
+                    (add (wolfram-nb--styled-text "_" clean-text) t))
+                   ((string-match-p "\"Courier\"" style-part)
+                    (add (wolfram-nb--styled-text "=" clean-text) t))
+                   (t (add clean-text)))))))
+           ;; Any other inline box (a link, an inline cell, ...): keep it as it is
+           (t (add (wolfram-nb--opaque-token part))))))
       result)))
-
 
 ;;;; Box data -> code text
 
@@ -1147,15 +1207,15 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
                                   (_ (if desc
                                          (format "[[%s][%s]]" (org-element-property :raw-link el) desc)
                                        (format "[[%s]]" (org-element-property :raw-link el)))))))
-                 (cons (if rich-context
-                           (list (format "\"%s\"" (wolfram-nb--escape-string raw-link)))
-                         (list raw-link))
-                       nil)))
+                 (wolfram-nb--string-parts raw-link rich-context)))
 
               ;; Code or verbatim elements
               ((memq type '(code verbatim))
                (let ((val (org-element-property :value el)))
-                 (cons (list (format "StyleBox[\"%s\", \"Courier\"]" (wolfram-nb--escape-string val))) t)))
+                 (cons (list (format "StyleBox[%s, \"Courier\"]"
+                                     (wolfram-nb--span-content
+                                      (car (wolfram-nb--string-parts val t)))))
+                       t)))
               
               ;; Bold, Italic, Underline elements
               (is-inline-rich
@@ -1174,11 +1234,7 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
               ;; footnote references, targets, macros, line breaks, ...): keep
               ;; the text as it was written rather than losing it.
               ((not (memq type '(paragraph item)))
-               (let ((raw (org-element-interpret-data el)))
-                 (cons (list (if rich-context
-                                 (format "\"%s\"" (wolfram-nb--escape-string raw))
-                               raw))
-                       nil)))
+               (wolfram-nb--string-parts (org-element-interpret-data el) rich-context))
 
               ;; Other/Container elements
               (t
@@ -1313,6 +1369,13 @@ Blank lines split a paragraph, and a line that starts like a headline, list
 item, comment, table, drawer or keyword changes the kind of cell it becomes."
   (and (not (string-empty-p content))
        (not (string-match-p "\\`[ \t\n]\\|[ \t\n]\\'" content))
+       ;; Lines that open something a later line in the document could close
+       ;; (a block, a drawer, a LaTeX environment) are harmless in isolation but
+       ;; not next to the other cells.
+       (not (let ((case-fold-search t))
+              (string-match-p
+               "\\(?:\\`\\|\n\\)[ \t]*\\(?:#\\|:[^ \t\n]*:[ \t]*\\(?:\n\\|\\'\\)\\|\\\\\\(?:begin\\|end\\){\\)"
+               content)))
        (let ((reading (wolfram-nb--org-reading content)))
          (and (= (nth 1 reading) 1)
               (not (nth 3 reading))
@@ -1424,6 +1487,11 @@ be taken for a headline, list or keyword."
   "Return non-nil if CELL was built from TextData, whose markers are formatting."
   (let ((boxes (wolfram-nb-cell-boxes cell)))
     (and boxes (not (get-text-property 0 'wolfram-nb-literal boxes)))))
+
+(defun wolfram-nb--code-for-evaluation (code)
+  "Return CODE without the marks that tell escaped backslashes apart."
+  (replace-regexp-in-string (concat "\\\\" wolfram-nb--escaped-backslash-mark) "\\"
+                            code t t))
 
 (defun wolfram-nb--block-value (element)
   "Return the text of the src or example block ELEMENT, unescaped once.
@@ -2587,7 +2655,7 @@ POSITION is where the evaluated source block ends.  Return non-nil."
     (unless (string= (org-element-property :language element) "wolfram")
       (user-error "Not a wolfram source block"))
     (let ((params (org-element-property :parameters element)))
-      (list (wolfram-nb--block-value element)
+      (list (wolfram-nb--code-for-evaluation (wolfram-nb--block-value element))
             (when (and params
                        (string-match ":format[ \t\n]+\\([^ \t\n]+\\)" params))
               (match-string 1 params))

@@ -194,7 +194,7 @@ be imported."
          (all (mapconcat #'identity forced "\n")))
     (should (string-match-p "ButtonBox\\[\"Wolfram\"" all))
     (should (string-match-p "InlineFormula" all))
-    (should-not (string-match-p "⟦wnb" all))))
+    (should-not (string-match-p "\\[wnb:" all))))
 
 (ert-deftest wolfram-nb-corpus-test-editing-a-cell-changes-only-that-cell ()
   "Editing the text of one code cell leaves all the others as they were."

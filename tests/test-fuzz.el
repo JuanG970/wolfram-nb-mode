@@ -96,10 +96,42 @@ Return the list of resulting cell strings."
             (cons org (wolfram-nb--org-to-cells org))))
       (delete-file file))))
 
+(defun wolfram-nb-fuzz--body-of (cell-string)
+  "Return the string literal body of CELL-STRING if it is a plain string cell."
+  (when (string-match "\\`Cell\\[\"" cell-string)
+    (let ((i (match-end 0)) (n (length cell-string)))
+      (while (and (< i n) (not (eq (aref cell-string i) ?\")))
+        (setq i (+ i (if (eq (aref cell-string i) ?\\) 2 1))))
+      (and (< i n) (substring cell-string (match-end 0) i)))))
+
+(defun wolfram-nb-fuzz--tabs-as-spaces (body)
+  "Return BODY with a tab escape read as a space (see the known limits)."
+  (replace-regexp-in-string "\\\\t" " " body))
+
+(defun wolfram-nb-fuzz--trim-body (body)
+  "Trim blanks, written as spaces and \\n or \\t escapes, from both ends of BODY."
+  (let ((again t))
+    (while again
+      (setq again nil)
+      (cond ((string-prefix-p " " body) (setq body (substring body 1) again t))
+            ((string-match "\\`\\\\[nt]" body) (setq body (substring body 2) again t))
+            ((string-suffix-p " " body) (setq body (substring body 0 -1) again t))
+            ((and (string-match "\\\\[nt]\\'" body)
+                  (let ((k 0) (j (- (length body) 3)))
+                    (while (and (>= j 0) (eq (aref body j) ?\\))
+                      (setq k (1+ k) j (1- j)))
+                    (= (% k 2) 0)))
+             (setq body (substring body 0 -2) again t)))))
+  body)
+
 (defun wolfram-nb-fuzz--text-of (cell-string)
   "Return the text a saved CELL-STRING shows, and its style."
   (let ((cell (wolfram-nb--parse-cell cell-string)))
-    (and cell (cons (wolfram-nb-cell-style cell) (wolfram-nb-cell-content cell)))))
+    (and cell (cons (wolfram-nb-cell-style cell)
+                    ;; the mark that tells an escaped backslash from the start of
+                    ;; a character escape is not part of the text
+                    (replace-regexp-in-string "\\\\\u200c" "\\"
+                                              (wolfram-nb-cell-content cell) t t)))))
 
 (defconst wolfram-nb-fuzz--single-line-styles
   '("Title" "Subtitle" "Chapter" "Section" "Subsection" "Subsubsection"
@@ -146,6 +178,16 @@ Return nil when it round-trips, else a description of what went wrong."
           (list :style style :body body :org org :problem "the cell before changed"))
          ((not (equal (cdr (nth 2 parts)) "after"))
           (list :style style :body body :org org :problem "the cell after changed"))
+         ;; A plain string cell must keep exactly the text that was in the file.
+         ((and (not single)
+               (member style '("Text" "Input" "Code" "Output" "Print" "Message"))
+               (wolfram-nb-fuzz--body-of (nth 1 back))
+               (not (equal (wolfram-nb-fuzz--tabs-as-spaces (wolfram-nb-fuzz--body-of (nth 1 back)))
+                           (wolfram-nb-fuzz--tabs-as-spaces (wolfram-nb-fuzz--trim-body body)))))
+          (list :style style :body body :org org
+                :expected (wolfram-nb-fuzz--trim-body body)
+                :got (wolfram-nb-fuzz--body-of (nth 1 back))
+                :problem "the text in the file changed"))
          ((if single
               (not (equal (wolfram-nb-fuzz--squash
                            (wolfram-nb-fuzz--same-meaning (cdr (nth 1 parts))))
@@ -205,6 +247,134 @@ Return nil when it round-trips, else a description of what went wrong."
   ("Item" "Subitem" "Subsubitem" "ItemNumbered" "SubitemNumbered"))
 (wolfram-nb-fuzz--deftest wolfram-nb-fuzz-test-code ("Input" "Code"))
 (wolfram-nb-fuzz--deftest wolfram-nb-fuzz-test-output ("Output" "Print" "Message"))
+
+;;; Several cells in one notebook
+;;
+;; Some failures need neighbours: a block opened in one cell and closed by a
+;; later one swallows the cells between them.
+
+(defconst wolfram-nb-fuzz--mixed-styles
+  '("Text" "Text" "Text" "Section" "Subsection" "Item" "Subitem" "ItemNumbered"
+    "Input" "Code" "Output" "Print" "Title")
+  "Styles used in mixed notebooks.")
+
+(defun wolfram-nb-fuzz--mixed-case (count)
+  "Round-trip a notebook of COUNT random cells; return the problems found."
+  (let* ((specs (cl-loop for i from 1 to count
+                         collect (let* ((style (wolfram-nb-fuzz--pick wolfram-nb-fuzz--mixed-styles))
+                                        (body (apply #'concat (wolfram-nb-fuzz--fragments (1+ (random 6))))))
+                                   (list style body i))))
+         (cells (mapcar (lambda (spec)
+                          (format "Cell[\"%s\", \"%s\", ExpressionUUID -> \"mx%d\"]"
+                                  (nth 1 spec) (nth 0 spec) (nth 2 spec)))
+                        specs))
+         (result (condition-case err (wolfram-nb-fuzz--round-trip cells)
+                   (error (list :error (format "%S" err)))))
+         (problems nil))
+    (if (keywordp (car result))
+        (list (list :problem (cadr result)))
+      (let ((back (cdr result)))
+        (if (/= (length back) count)
+            (list (list :problem (format "%d cells became %d" count (length back))
+                        :specs specs))
+          (cl-loop for spec in specs for out in back
+                   do (let* ((parsed (wolfram-nb-fuzz--text-of out))
+                             (style (nth 0 spec)) (body (nth 1 spec))
+                             (single (member style wolfram-nb-fuzz--single-line-styles))
+                             (expected (string-trim (wolfram-nb-fuzz--decode body))))
+                        (cond
+                         ((not (equal (car parsed) style))
+                          (push (list :problem (format "style %s became %s" style (car parsed))
+                                      :spec spec) problems))
+                         ((if single
+                              (not (equal (wolfram-nb-fuzz--squash
+                                           (wolfram-nb-fuzz--same-meaning (cdr parsed)))
+                                          (wolfram-nb-fuzz--squash
+                                           (wolfram-nb-fuzz--same-meaning expected))))
+                            (not (equal (wolfram-nb-fuzz--same-meaning (cdr parsed))
+                                        (wolfram-nb-fuzz--same-meaning expected))))
+                          (push (list :problem "text changed" :spec spec
+                                      :expected expected :got (cdr parsed))
+                                problems)))))
+          (nreverse problems))))))
+
+(ert-deftest wolfram-nb-fuzz-test-mixed-notebooks ()
+  (random (or (getenv "WNB_FUZZ_SEED") "wolfram-nb-fuzz-mixed"))
+  (let (problems)
+    (dotimes (_ (max 5 (/ (wolfram-nb-fuzz--count) 6)))
+      (setq problems (append problems (wolfram-nb-fuzz--mixed-case 30))))
+    (when problems
+      (message "%d problem(s)\n%s" (length problems)
+               (mapconcat (lambda (p) (format "%S" p))
+                          (cl-subseq problems 0 (min 6 (length problems))) "\n")))
+    (should-not problems)))
+
+;;; Rich text, judged by the kernel
+
+(defun wolfram-nb-fuzz--rich-part (depth)
+  "Return a random piece of TextData as source text."
+  (let ((roll (random 12)))
+    (cond
+     ((< roll 4) (format "\"%s\"" (apply #'concat (wolfram-nb-fuzz--fragments (1+ (random 3))))))
+     ((< roll 6) (format "StyleBox[\"%s\", \"%s\"]"
+                         (apply #'concat (wolfram-nb-fuzz--fragments (1+ (random 3))))
+                         (wolfram-nb-fuzz--pick '("Bold" "Italic" "Underlined" "Courier"))))
+     ((= roll 6) (format "StyleBox[\"%s\", FontColor -> RGBColor[1, 0, 0]]"
+                         (apply #'concat (wolfram-nb-fuzz--fragments (1+ (random 3))))))
+     ((= roll 7) (format "ButtonBox[\"%s\", BaseStyle -> \"Hyperlink\", ButtonData -> {URL[\"https://e.x/%d\"], None}]"
+                         (apply #'concat (wolfram-nb-fuzz--fragments (1+ (random 3)))) (random 100)))
+     ((= roll 8) (format "Cell[BoxData[FractionBox[\"a\", \"%d\"]], \"InlineFormula\"]" (random 9)))
+     ((and (= roll 9) (< depth 1))
+      (format "StyleBox[{%s, %s}, \"%s\"]"
+              (wolfram-nb-fuzz--rich-part (1+ depth)) (wolfram-nb-fuzz--rich-part (1+ depth))
+              (wolfram-nb-fuzz--pick '("Bold" "Italic"))))
+     (t (format "\"%s\"" (wolfram-nb-fuzz--pick wolfram-nb-fuzz--words))))))
+
+(defun wolfram-nb-fuzz--rich-cell (i)
+  "Return a random TextData cell string numbered I."
+  (format "Cell[TextData[{%s}], \"%s\", ExpressionUUID -> \"rf%d\"]"
+          (mapconcat #'identity
+                     (cl-loop repeat (1+ (random 5)) collect (wolfram-nb-fuzz--rich-part 0))
+                     ", ")
+          (wolfram-nb-fuzz--pick '("Text" "Text" "Section" "Item" "Subsection"))
+          i))
+
+(ert-deftest wolfram-nb-fuzz-test-rich-text-judged-by-the-kernel ()
+  "Edited rich cells keep their words, whatever is mixed into them."
+  (unless (wolfram-nb-kernel-available-p) (ert-skip "No Wolfram kernel found"))
+  (let* ((compare (expand-file-name "corpus/compare.wl"
+                                    (file-name-directory
+                                     (or load-file-name buffer-file-name default-directory))))
+         (kernel (wolfram-nb-kernel-start))
+         (original (make-temp-file "wolfram-nb-rich" nil ".nb"))
+         (saved (make-temp-file "wolfram-nb-rich" nil ".nb")))
+    (unwind-protect
+        (progn
+          (condition-case err
+              (wolfram-nb-kernel-eval-sync kernel (format "Get[%S]" compare) :wait 120)
+            (wolfram-nb-kernel-error
+             (ert-skip (format "The Wolfram kernel could not be started: %s" (cadr err)))))
+          (random (or (getenv "WNB_FUZZ_SEED") "wolfram-nb-fuzz-rich"))
+          (let* ((count (max 100 (* 4 (wolfram-nb-fuzz--count))))
+                 (cells (cl-loop for i from 1 to count collect (wolfram-nb-fuzz--rich-cell i))))
+            (with-temp-file original (insert (wolfram-nb-fuzz--notebook cells)))
+            ;; convert first: writing a file switches to a buffer of its own
+            (let ((text (with-temp-buffer
+                          (wolfram-nb-mode)
+                          (let ((org (wolfram-nb--cells-to-org
+                                      (wolfram-nb--parse-notebook original))))
+                            (setq wolfram-nb--box-sources nil)
+                            (wolfram-nb--cells-to-notebook (wolfram-nb--org-to-cells org))))))
+              (with-temp-file saved (insert text)))
+            (let ((differ (plist-get
+                           (wolfram-nb-kernel-eval-sync
+                            kernel (format "WolframNBCompare`wordsDiffer[%S, %S]" original saved)
+                            :timeout 120 :wait 180)
+                           :result)))
+              (should (equal differ "0")))))
+      (wolfram-nb-kernel-stop kernel)
+      (delete-file original)
+      (delete-file saved))))
 
 (provide 'test-fuzz)
 ;;; test-fuzz.el ends here

@@ -7,6 +7,7 @@
 BeginPackage["WolframNBCompare`"]
 
 compare::usage = "compare[original, saved] describes how two notebook files differ."
+wordsDiffer::usage = "wordsDiffer[original, saved] returns the number of cells whose words differ."
 
 Begin["`Private`"]
 
@@ -66,6 +67,22 @@ compare[original_String, saved_String] :=
                 "opts=" <> ratio[Count[op, i_ /; Drop[List @@ fo[[i]], 2] === Drop[List @@ fs[[i]], 2]], Length[op]]
             },
             ";"
+        ]
+    ]
+
+(* The words of a cell, ignoring styles, options and the characters used for markup. *)
+words[Cell[c_String, ___]] := strip[c]
+words[Cell[c_, ___]] :=
+    strip[StringJoin[Cases[c //. {StyleBox[x_, ___] :> x, ButtonBox[x_, ___] :> x}, _String, Infinity]]]
+strip[s_String] :=
+    StringReplace[s, (WhitespaceCharacter | "*" | "/" | "_" | "=" | "~" | "+" | FromCharacterCode[8203]) .. -> ""]
+
+wordsDiffer[original_String, saved_String] :=
+    Quiet @ Module[{fo = flatCells[Get[original]], fs = flatCells[Get[saved]]},
+        If [Length[fo] =!= Length[fs] || styleOf /@ fo =!= styleOf /@ fs,
+            -1
+            ,
+            Count[Range[Length[fo]], i_ /; words[fo[[i]]] =!= words[fs[[i]]]]
         ]
     ]
 

@@ -40,7 +40,10 @@
     ("Item" "") ("Item" "a\\nb") ("Item" "foo :: bar") ("Item" "[ ] todo") ("Item" "[@3] x")
     ("Item" "-----]") ("Item" "- x1") ("Item" ":tag:") ("Item" "*b* and /i/")
     ("ItemNumbered" "1. text") ("ItemNumbered" "") ("Subitem" "alone") ("Subsubitem" "alone")
-    ("SubitemNumbered" "alone"))
+    ("SubitemNumbered" "alone")
+    ;; a literal backslash before characters that would form a character escape
+    ("Text" "\\\\(z\\\\)") ("Input" "a\\\\(b") ("Text" "\\\\[Alpha]") ("Text" "x\\\\*y")
+    ("Output" "\\\\\\\\(") ("Text" "end \\\\"))
   "Pairs of a style and a string body that once failed.")
 
 (ert-deftest wolfram-nb-edge-test-cases-that-once-failed ()
@@ -53,6 +56,63 @@
     (should-not failures)))
 
 ;;; Cells in context
+
+(ert-deftest wolfram-nb-edge-test-block-opened-in-one-cell-closed-by-another ()
+  "An indented #+begin_src in a paragraph must not swallow the cells that follow."
+  (let* ((cells '("Cell[\"a #+begin_src\\n #+begin_src x\", \"Text\"]"
+                  "Cell[\"1+1\", \"Input\"]"
+                  "Cell[\"after\", \"Text\"]"))
+         (back (cdr (wolfram-nb-fuzz--round-trip cells))))
+    (should (equal (mapcar (lambda (s) (wolfram-nb-cell-style (wolfram-nb--parse-cell s))) back)
+                   '("Text" "Input" "Text")))
+    (should (equal (wolfram-nb-cell-content (wolfram-nb--parse-cell (nth 2 back))) "after"))))
+
+(ert-deftest wolfram-nb-edge-test-drawer-and-environment-openers-are-contained ()
+  (let* ((cells '("Cell[\"x\\n :PROPERTIES:\\ny\", \"Text\"]"
+                  "Cell[\"\\\\begin{x}\\nmore\", \"Text\"]"
+                  "Cell[\"Heading\", \"Section\", ExpressionUUID -> \"h\"]"
+                  "Cell[\"end\", \"Text\"]"))
+         (back (cdr (wolfram-nb-fuzz--round-trip cells))))
+    (should (= (length back) 4))
+    (should (equal (mapcar (lambda (s) (wolfram-nb-cell-style (wolfram-nb--parse-cell s))) back)
+                   '("Text" "Text" "Section" "Text")))))
+
+(ert-deftest wolfram-nb-edge-test-inline-box-next-to-a-url-or-latex ()
+  "An inline box right after a URL or \\begin{x} is not swallowed by it."
+  (dolist (tail '("\"https://x.y/z\", Cell[BoxData[FractionBox[\"a\", \"3\"]], \"InlineFormula\"]"
+                  "\"\\\\begin{x}\", Cell[BoxData[FractionBox[\"a\", \"3\"]], \"InlineFormula\"]"
+                  "StyleBox[\"=v=\", \"Courier\"], Cell[BoxData[FractionBox[\"a\", \"3\"]], \"InlineFormula\"]"))
+    (let* ((cell (format "Cell[TextData[{%s}], \"Text\", ExpressionUUID -> \"t\"]" tail))
+           (back (cadr (cdr (wolfram-nb-fuzz--round-trip (list "Cell[\"b\", \"Text\"]" cell))))))
+      (should (string-match-p "InlineFormula" back))
+      (should-not (string-match-p "\\[wnb:" back)))))
+
+(ert-deftest wolfram-nb-edge-test-touching-styled-spans-stay-styled ()
+  (let* ((cell "Cell[TextData[{StyleBox[\"bold\", \"Bold\"], StyleBox[\"italic\", \"Italic\"], \"x\", StyleBox[\"code\", \"Courier\"]}], \"Text\"]")
+         (back (cadr (cdr (wolfram-nb-fuzz--round-trip (list "Cell[\"b\", \"Text\"]" cell))))))
+    (should (string-match-p "StyleBox\\[\"bold\", \"Bold\"\\]" back))
+    (should (string-match-p "StyleBox\\[\"italic\", \"Italic\"\\]" back))
+    (should (string-match-p "StyleBox\\[\"code\", \"Courier\"\\]" back))
+    ;; no marker characters and no invisible separators leak into the file
+    (should-not (string-match-p "[\u200b]" back))))
+
+(ert-deftest wolfram-nb-edge-test-invisible-marks-never-reach-the-file ()
+  (dolist (body '("a\\\\(b" "\\\\[Alpha]" "x\\\\" "p\\\\\\\\(q"))
+    (let ((back (cadr (cdr (wolfram-nb-fuzz--round-trip
+                       (list "Cell[\"b\", \"Text\"]"
+                             (format "Cell[\"%s\", \"Input\"]" body)))))))
+      (should-not (string-match-p "[\u200b\u200c]" back)))))
+
+(ert-deftest wolfram-nb-edge-test-escaped-backslash-reads-back-the-same ()
+  "A literal backslash before (, [Alpha] or * is not turned into a character escape."
+  (dolist (body '("\\\\(z\\\\)" "a\\\\[Alpha]b" "\\\\*" "\\\\\\[Alpha]"))
+    (should (equal (wolfram-nb--escape-string (wolfram-nb--unescape-string body)) body))))
+
+;;; Evaluation never sees the marks
+
+(ert-deftest wolfram-nb-edge-test-code-for-evaluation-has-no-marks ()
+  (should (equal (wolfram-nb--code-for-evaluation "a\\\u200c(b \u200c c") "a\\(b \u200c c")))
+
 
 (defun wolfram-nb-edge--roundtrip-styles (cells)
   "Return the styles after converting the cell strings CELLS to Org and back."
