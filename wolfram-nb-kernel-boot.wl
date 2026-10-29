@@ -125,7 +125,7 @@ respond[id_String, code_String, timeout_, flags_String] :=
             b64[
                 If [result === Null,
                     "",
-                    ToString[result, OutputForm, PageWidth -> Infinity]
+                    ToString[result, OutputForm, PageWidth -> 150]
                 ]
             ]
         ];

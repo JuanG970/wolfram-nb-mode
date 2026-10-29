@@ -190,6 +190,16 @@ with its original boxes, so the formatting of a notebook survives a visit in
 Emacs.  OPTIONS matters for cells that cannot carry an attribute line in Org
 (titles and list items).")
 
+(defvar wolfram-nb--previous-list-level :unknown
+  "While cells are written as Org, the list level of the previous cell, or nil.
+Org reads the depth of an item from the item before it.  The value is
+`:unknown' when a cell is converted on its own.")
+
+(defun wolfram-nb--note-list-level (level)
+  "Record LEVEL as the list level of the cell just written, when it is known."
+  (unless (eq wolfram-nb--previous-list-level :unknown)
+    (setq wolfram-nb--previous-list-level level)))
+
 (defvar wolfram-nb--box-counts nil
   "Hash table counting how often each cell key was met in the current pass.")
 
@@ -248,7 +258,13 @@ Also strips long-string markers \\< and \\> if present, and handles line continu
   (let* ((clean (if (string-prefix-p "\\<" str)
                     (substring str 2)
                   str))
-         (clean2 (if (string-suffix-p "\\>" clean)
+         ;; `\>' ends a long string only when its backslash is not itself the
+         ;; second half of an escaped backslash.
+         (clean2 (if (and (string-suffix-p "\\>" clean)
+                          (let ((k 0) (j (- (length clean) 2)))
+                            (while (and (>= j 0) (eq (aref clean j) ?\\))
+                              (setq k (1+ k) j (1- j)))
+                            (= (% k 2) 1)))
                      (substring clean 0 -2)
                    clean)))
     ;; Remove line continuations (backslash followed by optional whitespace and newline)
@@ -427,10 +443,13 @@ Handles StyleBox for Bold/Italic formatting."
          ((string-prefix-p "StyleBox[" part)
           (let ((text (wolfram-nb--extract-head-argument part "StyleBox"))
                 (style-part (substring part (length "StyleBox["))))
-            (if (not (and text (string-prefix-p "\"" text)))
-                ;; Not plain text inside: keep the whole box as it is.
+            (if (not (and text (or (string-prefix-p "\"" text)
+                                   (string-prefix-p "{" text))))
+                ;; Not text inside: keep the whole box as it is.
                 (setq result (concat result (wolfram-nb--opaque-token part)))
-              (let ((clean-text (wolfram-nb--unescape-string (substring text 1 -1))))
+              (let ((clean-text (if (string-prefix-p "{" text)
+                                    (wolfram-nb--parse-textdata-content text)
+                                  (wolfram-nb--unescape-string (substring text 1 -1)))))
                 ;; Check for Bold/Italic in the rest of the StyleBox
                 (cond
                  ((string-match-p "\"Bold\"" style-part)
@@ -1059,6 +1078,18 @@ When called from a `wolfram-nb-mode' buffer, also sets
 
 ;;;; Cell -> Org conversion
 
+(defun wolfram-nb--span-content (parts)
+  "Return the first argument of a StyleBox holding the text PARTS.
+Plain strings are merged into one string.  A span that has styled pieces
+inside becomes a list, which is what a StyleBox accepts for that."
+  (cond
+   ((null parts) "\"\"")
+   ((cl-every (lambda (part) (string-match-p "\\`\".*\"\\'" part)) parts)
+    (format "\"%s\""
+            (mapconcat (lambda (part) (substring part 1 -1)) parts "")))
+   ((cdr parts) (format "{%s}" (string-join parts ", ")))
+   (t (car parts))))
+
 (defun wolfram-nb--string-parts (string rich-context)
   "Return (PARTS . RICH) for the text STRING.
 Tokens standing for inline boxes are replaced by the boxes themselves, which
@@ -1105,19 +1136,17 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
              (cond
               ;; Link elements
               ((eq type 'link)
-               (let* ((link-type (org-element-property :type el))
-                      (path (org-element-property :path el))
-                      (desc-parts '())
+               (let* ((desc-parts '())
                       (desc (when contents
                               (dolist (c contents)
-                                (setq desc-parts (append desc-parts (car (wolfram-nb--org-element-to-textdata c rich-context)))))
+                                (setq desc-parts (append desc-parts (car (wolfram-nb--org-element-to-textdata c nil)))))
                               (string-join desc-parts "")))
                       (raw-link (pcase (org-element-property :format el)
                                   ('plain (org-element-property :raw-link el))
                                   ('angle (format "<%s>" (org-element-property :raw-link el)))
                                   (_ (if desc
-                                         (format "[[%s:%s][%s]]" link-type path desc)
-                                       (format "[[%s:%s]]" link-type path))))))
+                                         (format "[[%s][%s]]" (org-element-property :raw-link el) desc)
+                                       (format "[[%s]]" (org-element-property :raw-link el)))))))
                  (cons (if rich-context
                            (list (format "\"%s\"" (wolfram-nb--escape-string raw-link)))
                          (list raw-link))
@@ -1137,9 +1166,20 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
                  (dolist (c contents)
                    (let ((res (wolfram-nb--org-element-to-textdata c t)))
                      (setq inner-parts (append inner-parts (car res)))))
-                 (let ((joined-inner (string-join inner-parts ", ")))
-                   (cons (list (format "StyleBox[%s, \"%s\"]" joined-inner style)) t))))
+                 (cons (list (format "StyleBox[%s, \"%s\"]"
+                                     (wolfram-nb--span-content inner-parts) style))
+                       t)))
               
+              ;; Objects Org knows but this converter does not style (subscripts,
+              ;; footnote references, targets, macros, line breaks, ...): keep
+              ;; the text as it was written rather than losing it.
+              ((not (memq type '(paragraph item)))
+               (let ((raw (org-element-interpret-data el)))
+                 (cons (list (if rich-context
+                                 (format "\"%s\"" (wolfram-nb--escape-string raw))
+                               raw))
+                       nil)))
+
               ;; Other/Container elements
               (t
                (let ((parts '()))
@@ -1268,17 +1308,30 @@ backslash-newline continuation disappears, so no string changes its value."
       (apply #'string (nreverse out)))))
 
 (defun wolfram-nb--paragraph-safe-p (content)
-  "Return non-nil if CONTENT survives as one ordinary Org paragraph.
+  "Return non-nil if Org reads CONTENT as exactly one ordinary paragraph.
 Blank lines split a paragraph, and a line that starts like a headline, list
-item, comment, table or keyword changes the kind of cell it becomes."
+item, comment, table, drawer or keyword changes the kind of cell it becomes."
   (and (not (string-empty-p content))
        (not (string-match-p "\\`[ \t\n]\\|[ \t\n]\\'" content))
-       (not (string-match-p "\n[ \t]*\n" content))
-       (not (string-match-p
-             (concat "\\(?:\\`\\|\n\\)[ \t]*"
-                     "\\(?:[-+*][ \t]\\|[0-9]+[.)][ \t]\\|#\\|:[ \t]\\||\\|-----"
-                     "\\|\\\\\\(?:begin\\|\\[\\)\\|\\[fn:\\)")
-             content))))
+       (let ((reading (wolfram-nb--org-reading content)))
+         (and (= (nth 1 reading) 1)
+              (not (nth 3 reading))
+              (null (cl-set-difference (nth 0 reading)
+                                       '(org-data section paragraph)))))))
+
+(defun wolfram-nb--item-safe-p (content bullet)
+  "Return non-nil if CONTENT written after BULLET is one ordinary list item.
+Not when it is empty, has several lines, or Org would read a tag, a checkbox or
+a counter in it."
+  (and (not (string-empty-p content))
+       (not (string-match-p "\n" content))
+       (not (string-match-p "\\`[ \t]\\|[ \t]\\'" content))
+       (let ((reading (wolfram-nb--org-reading (concat bullet content))))
+         (and (= (nth 1 reading) 1)
+              (= (nth 4 reading) 1)
+              (not (nth 3 reading))
+              (null (cl-set-difference (nth 0 reading)
+                                       '(org-data section plain-list item paragraph)))))))
 
 (defun wolfram-nb--attr-line (style default-style opts)
   "Return the #+ATTR_WOLFRAM: line for a block of STYLE with options OPTS.
@@ -1315,22 +1368,38 @@ ATTR is either raw cell options or the keyword form `:style \"S\" :options \"O\"
    (t (format "CellLabel->\"%s\"" name))))
 
 (defun wolfram-nb--trim-trailing-newline (parts rich)
-  "Drop the newline Org leaves at the end of the last of PARTS when RICH."
-  (let* ((last-part (car (last parts)))
-         (body (and rich last-part
-                    (string-match "\\`\"\\(.*\\)\"\\'" last-part)
-                    (match-string 1 last-part))))
-    (if (not body)
-        parts
-      (while (and (string-suffix-p "\\n" body)
-                  ;; an escape only if an even number of backslashes precede it
-                  (let ((k 0) (j (- (length body) 3)))
-                    (while (and (>= j 0) (eq (aref body j) ?\\))
-                      (setq k (1+ k) j (1- j)))
-                    (= (% k 2) 0)))
-        (setq body (substring body 0 -2)))
-      (append (butlast parts)
-              (unless (string-empty-p body) (list (format "\"%s\"" body)))))))
+  "Drop the blanks Org leaves at the ends of the text PARTS when RICH.
+Only plain string parts at the very start and end are touched."
+  (if (not rich)
+      parts
+    (cl-flet ((literal-body (part)
+                (and part (string-match "\\`\"\\(.*\\)\"\\'" part)
+                     (match-string 1 part))))
+      (let ((head (literal-body (car parts)))
+            (tail (literal-body (car (last parts)))))
+        ;; leading blanks of the first part
+        (when head
+          (let ((new (replace-regexp-in-string "\\`\\(?: \\|\\\\n\\|\\\\t\\)+" "" head)))
+            (setq parts (cons (if (string-empty-p new) nil (format "\"%s\"" new))
+                              (cdr parts)))
+            (setq parts (delq nil parts))))
+        ;; trailing blanks of the last part
+        (setq tail (literal-body (car (last parts))))
+        (when tail
+          (let ((body tail))
+            (while (let ((k 0) (n (length body)))
+                     (cond
+                      ((string-suffix-p " " body) t)
+                      ((and (string-match-p "\\\\[nt]\\'" body)
+                            (progn (let ((j (- n 3)))
+                                     (while (and (>= j 0) (eq (aref body j) ?\\))
+                                       (setq k (1+ k) j (1- j))))
+                                   (= (% k 2) 0)))
+                       t)))
+              (setq body (substring body 0 (if (string-suffix-p " " body) -1 -2))))
+            (setq parts (append (butlast parts)
+                                (unless (string-empty-p body) (list (format "\"%s\"" body))))))))
+      parts)))
 
 (defun wolfram-nb--parts-to-content (parts rich)
   "Join the text PARTS into cell content; RICH parts become a TextData."
@@ -1343,7 +1412,7 @@ ATTR is either raw cell options or the keyword form `:style \"S\" :options \"O\"
   "Return the cell content for the text VALUE of a wolfram-text block.
 Inline markup is read with Org's object parser only, so nothing in VALUE can
 be taken for a headline, list or keyword."
-  (let* ((text (string-trim-right (org-unescape-code-in-string value) "\n"))
+  (let* ((text (string-trim-right value "\n"))
          (objects (org-element-parse-secondary-string
                    text (org-element-restriction 'paragraph)))
          (res (wolfram-nb--org-element-to-textdata
@@ -1356,6 +1425,31 @@ be taken for a headline, list or keyword."
   (let ((boxes (wolfram-nb-cell-boxes cell)))
     (and boxes (not (get-text-property 0 'wolfram-nb-literal boxes)))))
 
+(defun wolfram-nb--block-value (element)
+  "Return the text of the src or example block ELEMENT, unescaped once.
+Org versions differ in whether `:value' still has its commas, so the text is
+taken from the buffer, which also keeps its indentation."
+  (save-excursion
+    (goto-char (org-element-property :post-affiliated element))
+    (forward-line 1)
+    (let ((start (point))
+          (end (progn (goto-char (org-element-property :end element))
+                      (skip-chars-backward " \t\n")
+                      (forward-line 0)
+                      (point))))
+      (org-unescape-code-in-string
+       (if (< start end) (buffer-substring-no-properties start end) "")))))
+
+(defun wolfram-nb--headline-title (element)
+  "Return the whole text of the headline ELEMENT after its stars.
+Org takes a leading TODO keyword, a priority, a trailing :tag: and a COMMENT
+prefix out of a title; in a notebook they are words like any other."
+  (save-excursion
+    (goto-char (org-element-property :begin element))
+    (looking-at "\\*+[ \t]*")
+    (goto-char (match-end 0))
+    (string-trim (buffer-substring-no-properties (point) (line-end-position)))))
+
 (defun wolfram-nb--element-text (element)
   "Return the raw text of the paragraph ELEMENT in the current buffer.
 Unlike `org-element-interpret-data' this leaves out affiliated keywords."
@@ -1363,11 +1457,55 @@ Unlike `org-element-interpret-data' this leaves out affiliated keywords."
    (buffer-substring-no-properties (org-element-property :contents-begin element)
                                    (org-element-property :contents-end element))))
 
+(defvar wolfram-nb--scratch-buffer nil
+  "A hidden Org buffer used to ask Org how it reads a piece of text.")
+
+(defun wolfram-nb--scratch ()
+  "Return the hidden Org buffer, creating it when needed."
+  (if (buffer-live-p wolfram-nb--scratch-buffer)
+      wolfram-nb--scratch-buffer
+    (setq wolfram-nb--scratch-buffer
+          (with-current-buffer (get-buffer-create " *wolfram-nb-scratch*")
+            (let ((org-inhibit-startup t))
+              (delay-mode-hooks (org-mode)))
+            (current-buffer)))))
+
+(defun wolfram-nb--org-reading (text)
+  "Return (ELEMENTS PARAGRAPHS OBJECTS AFFILIATED) for how Org reads TEXT.
+ELEMENTS and OBJECTS are the types met, PARAGRAPHS the number of paragraphs,
+and AFFILIATED is non-nil when a keyword such as #+NAME: at the start of TEXT
+would be attached to a paragraph instead of being part of it."
+  (with-current-buffer (wolfram-nb--scratch)
+    (erase-buffer)
+    (insert text "\n")
+    (let ((elements '()) (objects '()) (paragraphs 0) (items 0) (affiliated nil))
+      (cl-labels ((walk (node)
+                    (if (stringp node)
+                        (cl-pushnew 'plain-text objects)
+                      (let ((type (org-element-type node)))
+                        (if (or (memq type org-element-all-elements)
+                                (memq type '(org-data headline)))
+                            (progn (cl-pushnew type elements)
+                                   (when (eq type 'item)
+                                     (cl-incf items)
+                                     (when (or (org-element-property :tag node)
+                                               (org-element-property :checkbox node)
+                                               (org-element-property :counter node))
+                                       (setq affiliated t)))
+                                   (when (eq type 'paragraph)
+                                     (cl-incf paragraphs)
+                                     (unless (= (org-element-property :begin node)
+                                                (org-element-property :post-affiliated node))
+                                       (setq affiliated t))))
+                          (cl-pushnew type objects)))
+                      (mapc #'walk (org-element-contents node)))))
+        (walk (org-element-parse-buffer)))
+      (list elements paragraphs objects affiliated items))))
+
 (defun wolfram-nb--markup-p (text)
-  "Return non-nil if Org would read inline markup or a link in TEXT."
-  (cl-some (lambda (object) (not (stringp object)))
-           (org-element-parse-secondary-string
-            text (org-element-restriction 'paragraph))))
+  "Return non-nil if Org would read inline markup, a link or anything but
+plain text in TEXT."
+  (cl-set-difference (nth 2 (wolfram-nb--org-reading text)) '(plain-text)))
 
 (defun wolfram-nb--protect-markup (text)
   "Return TEXT with a zero-width space before markers Org would act on.
@@ -1388,16 +1526,21 @@ For plain strings, whose asterisks and slashes are not formatting."
 
 (defun wolfram-nb--cell-to-org (cell)
   "Convert a `wolfram-nb-cell' CELL to Org-mode text."
-  (let* ((style (wolfram-nb-cell-style cell))
+  (let* ((previous-level (prog1 wolfram-nb--previous-list-level
+                           (wolfram-nb--note-list-level nil)))
+         (style (wolfram-nb-cell-style cell))
          (content (wolfram-nb-cell-content cell))
          (raw-opts (wolfram-nb-cell-raw-options cell)))
     (if (or (wolfram-nb--box-cell-p content)
             (and (> (length content) 50000)
-                 (string-match-p "BoxData\\|GraphicsBox\\|RasterBox\\|CompressedData" content)))
+                 (string-match-p "BoxData\\|GraphicsBox\\|RasterBox\\|CompressedData" content))
+            ;; one very long line makes Emacs crawl
+            (string-match-p "[^\n]\\{20000\\}" content))
         (wolfram-nb--placeholder-block
          (wolfram-nb--stash-cell-content content)
          style raw-opts
-         (if (> (length content) 50000)
+         (if (or (> (length content) 50000)
+                 (string-match-p "[^\n]\\{20000\\}" content))
              (format "<Large Cell Block (%s) - Hidden to prevent Emacs from freezing. Will be preserved on save.>"
                      (wolfram-nb--format-size (length content)))
            (format "<Graphics Block (%s) - kept verbatim and preserved on save.>"
@@ -1410,8 +1553,7 @@ For plain strings, whose asterisks and slashes are not formatting."
                 (wolfram-nb--one-line content))
                ((or (assoc style wolfram-nb-list-styles)
                     (assoc style wolfram-nb-numbered-list-styles))
-                (replace-regexp-in-string
-                 "\\`[•●◦-][ \t]*\\|\\`[0-9]+\\.\\s-*" "" content))
+                (replace-regexp-in-string "\\`[•●◦][ \t]*" "" content))
                (t content)))
       (cond
        ;; Special Keywords
@@ -1431,27 +1573,35 @@ For plain strings, whose asterisks and slashes are not formatting."
                               (wolfram-nb--flatten-options raw-opts))
                     ""))))
 
-       ;; A plain item whose characters Org would read as markup: a literal block.
-       ((and (or (assoc style wolfram-nb-list-styles)
-                 (assoc style wolfram-nb-numbered-list-styles))
-             (not (wolfram-nb-cell-boxes-rich-p cell))
-             (not (string-empty-p content))
-             (wolfram-nb--markup-p content))
-        (format "%s#+begin_src wolfram-string\n%s\n#+end_src\n\n"
-                (wolfram-nb--attr-line style "Text" raw-opts)
-                (org-escape-code-in-string content)))
-
-       ;; Lists
+       ;; Lists.  An item that does not survive as a one-line list item is kept
+       ;; in a block Org does not interpret.
        ((or (assoc style wolfram-nb-list-styles)
             (assoc style wolfram-nb-numbered-list-styles))
         (let* ((numbered (assoc style wolfram-nb-numbered-list-styles))
                (level (cdr (or numbered (assoc style wolfram-nb-list-styles))))
                (indent (make-string (* (1- level) 2) ?\s))
-               (bullet (if numbered "1. " "- ")))
-          (format "%s%s%s\n"
-                  indent
-                  bullet
-                  (replace-regexp-in-string "\\`[•●◦-][ \t]*\\|\\`[0-9]+\\.\\s-*" "" content))))
+               (bullet (if numbered "1. " "- "))
+               (text (replace-regexp-in-string
+                      "\\`[•●◦][ \t]*"
+                      "" content))
+               (rich (wolfram-nb-cell-boxes-rich-p cell)))
+          (cond
+           ((and (wolfram-nb--item-safe-p text bullet)
+                 (or rich (not (wolfram-nb--markup-p text)))
+                 ;; the depth is read from the item before, so it must be there
+                 (or (= level 1)
+                     (eq previous-level :unknown)
+                     (and (numberp previous-level) (>= previous-level (1- level)))))
+            (wolfram-nb--note-list-level level)
+            (format "%s%s%s\n" indent bullet text))
+           (rich
+            (format "%s#+begin_src wolfram-text\n%s\n#+end_src\n\n"
+                    (wolfram-nb--attr-line style "Text" raw-opts)
+                    (org-escape-code-in-string content)))
+           (t
+            (format "%s#+begin_src wolfram-string\n%s\n#+end_src\n\n"
+                    (wolfram-nb--attr-line style "Text" raw-opts)
+                    (org-escape-code-in-string content))))))
 
        ;; Blockquotes
        ((string= style "Quote")
@@ -1505,7 +1655,8 @@ For plain strings, whose asterisks and slashes are not formatting."
 
 (defun wolfram-nb--cells-to-org (cells)
   "Convert a list of `wolfram-nb-cell' CELLS to Org-mode text."
-  (let ((body (let ((wolfram-nb--box-counts (make-hash-table :test 'equal)))
+  (let ((body (let ((wolfram-nb--box-counts (make-hash-table :test 'equal))
+                    (wolfram-nb--previous-list-level nil))
                 (mapconcat #'wolfram-nb--cell-to-org cells "")))
         (session wolfram-nb--session-raw))
     (if (and session (not (string-empty-p session)))
@@ -1555,26 +1706,27 @@ it is inserted as-is without extra quotes/escaping."
       (let ((tree (org-element-parse-buffer))
             (cells '())
             (wolfram-nb--box-counts (make-hash-table :test 'equal)))
-      ;; #+TITLE: -> Title cell
-      (org-element-map tree 'keyword
-        (lambda (kw)
-          (pcase (org-element-property :key kw)
-            ((or "TITLE" "SUBTITLE")
-             (let* ((style (if (equal (org-element-property :key kw) "TITLE")
-                               "Title" "Subtitle"))
-                    (value (org-element-property :value kw))
-                    (entry (wolfram-nb--lookup-source style nil value)))
-               (push (wolfram-nb--make-cell-string
-                      (or (car entry) value) style (cdr entry))
-                     cells))))))
       ;; Main content
-      (org-element-map tree '(headline paragraph plain-list src-block example-block quote-block table horizontal-rule)
+      (org-element-map tree '(keyword headline paragraph plain-list src-block example-block quote-block table horizontal-rule)
         (lambda (element)
           (pcase (org-element-type element)
+            ;; #+TITLE: and #+SUBTITLE: are cells where they stand
+            ('keyword
+             (when (member (org-element-property :key element) '("TITLE" "SUBTITLE"))
+               (let* ((style (if (equal (org-element-property :key element) "TITLE")
+                                 "Title" "Subtitle"))
+                      (value (org-element-property :value element))
+                      (entry (wolfram-nb--lookup-source style nil value)))
+                 (push (wolfram-nb--make-cell-string
+                        (or (car entry) value) style (cdr entry))
+                       cells))))
+
             ('headline
              (let* ((level (org-element-property :level element))
-                    (title-objects (org-element-property :title element))
-                    (title (org-element-interpret-data title-objects))
+                    (title (wolfram-nb--headline-title element))
+                    (title-objects (org-element-parse-secondary-string
+                                    (concat title "\n")
+                                    (org-element-restriction 'paragraph)))
                     (title-res (wolfram-nb--org-element-to-textdata
                                 (cons 'paragraph (cons nil title-objects))))
                     (style (or (car (rassoc level wolfram-nb-headline-styles))
@@ -1656,7 +1808,7 @@ it is inserted as-is without extra quotes/escaping."
 
             ('src-block
              (let* ((lang (org-element-property :language element))
-                    (value (org-element-property :value element))
+                    (value (wolfram-nb--block-value element))
                     (name (org-element-property :name element))
                     (raw-opts (car (org-element-property :attr_wolfram element))))
                (cond
@@ -1667,16 +1819,14 @@ it is inserted as-is without extra quotes/escaping."
                         (cached-content (and id
                                              wolfram-nb--large-cells-cache
                                              (gethash id wolfram-nb--large-cells-cache)))
-                        (cell-content (or cached-content
-                                          (org-unescape-code-in-string value)))
+                        (cell-content (or cached-content value))
                         (parsed-attr (wolfram-nb--parse-attr-wolfram raw-opts))
                         (style (car parsed-attr))
                         (opts (wolfram-nb--with-label (cdr parsed-attr) name)))
                    (push (wolfram-nb--make-cell-string cell-content style opts) cells)))
                 ((string= lang "wolfram-string")
                  (let* ((attr (wolfram-nb--parse-block-attr raw-opts "Text"))
-                        (text (string-trim-right
-                               (org-unescape-code-in-string value) "\n")))
+                        (text (string-trim-right value "\n")))
                    (push (wolfram-nb--make-cell-string
                           (or (car (wolfram-nb--lookup-source
                                     (car attr) (cdr attr) text))
@@ -1689,8 +1839,7 @@ it is inserted as-is without extra quotes/escaping."
                    (push (wolfram-nb--make-cell-string
                           (or (car (wolfram-nb--lookup-source
                                     (car attr) (cdr attr)
-                                    (string-trim-right
-                                     (org-unescape-code-in-string value) "\n")))
+                                    (string-trim-right value "\n")))
                               (wolfram-nb--text-block-content value))
                           (car attr)
                           (wolfram-nb--with-label (cdr attr) name))
@@ -1700,7 +1849,7 @@ it is inserted as-is without extra quotes/escaping."
                               raw-opts
                               (if (and lang (string= lang "wolfram")) "Input" "Code"))))
                    (push (wolfram-nb--make-cell-string
-                          (let ((text (org-unescape-code-in-string value)))
+                          (let ((text value))
                             (or (car (wolfram-nb--lookup-source
                                       (car attr) (cdr attr) text))
                                 text))
@@ -1709,13 +1858,13 @@ it is inserted as-is without extra quotes/escaping."
                          cells))))))
 
             ('example-block
-             (let* ((value (org-element-property :value element))
+             (let* ((value (wolfram-nb--block-value element))
                     (name (org-element-property :name element))
                     (attr (wolfram-nb--parse-block-attr
                            (car (org-element-property :attr_wolfram element))
                            "Output")))
                (push (wolfram-nb--make-cell-string
-                      (let ((text (org-unescape-code-in-string value)))
+                      (let ((text value))
                         (or (car (wolfram-nb--lookup-source
                                   (car attr) (cdr attr) text))
                             text))
@@ -1726,11 +1875,34 @@ it is inserted as-is without extra quotes/escaping."
 
 ;;;; Notebook serialization
 
+(defun wolfram-nb--drop-repeated-uuid (cell seen)
+  "Return the cell string CELL without its ExpressionUUID if SEEN has it.
+SEEN is a hash table of the identifiers used so far; a new one is added.
+Copying a cell in Org copies its identifier, and the Front End expects each
+cell to have its own."
+  (let ((info (wolfram-nb--cell-style-info cell)))
+    (if (not info)
+        cell
+      (let* ((options (substring cell (cdr info))))
+        (if (not (string-match
+                  "\\(,[ \t\n]*\\)?ExpressionUUID[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"\\(?:[ \t\n]*,\\)?"
+                  options))
+            cell
+          (let ((uuid (match-string 2 options)))
+            (if (not (gethash uuid seen))
+                (progn (puthash uuid t seen) cell)
+              (concat (substring cell 0 (cdr info))
+                      (replace-match "" t t options)))))))))
+
 (defun wolfram-nb--cells-to-notebook (cells &optional options)
   "Serialize CELLS to a Notebook[{...}] string.
 OPTIONS, if non-nil, is a raw string appended after the cell list.
 If a session is active, injects TaggingRules into the notebook options."
-  (let* ((cells-str (string-join cells ",\n"))
+  (let* ((seen (make-hash-table :test 'equal))
+         (cells-str (string-join
+                     (mapcar (lambda (cell) (wolfram-nb--drop-repeated-uuid cell seen))
+                             cells)
+                     ",\n"))
          (raw-opts (or options
                        (and (local-variable-p 'wolfram-nb--notebook-options)
                             wolfram-nb--notebook-options)))
@@ -1782,6 +1954,22 @@ SESSION is the raw endpoint string, or nil to remove."
                    (format " [session: %s]" wolfram-nb--session-raw)
                  "")))))
 
+(defun wolfram-nb--write-file-atomically (file text)
+  "Write TEXT to FILE so that a failure leaves the old file alone.
+The text goes to a file beside FILE first, which then replaces it."
+  (let* ((dir (file-name-directory (expand-file-name file)))
+         (temp (make-temp-file (expand-file-name ".wolfram-nb-save-" dir) nil ".tmp"))
+         (coding-system-for-write 'utf-8-unix))
+    (condition-case err
+        (progn
+          (with-temp-file temp (insert text))
+          (when (file-exists-p file)
+            (set-file-modes temp (file-modes file)))
+          (rename-file temp file t))
+      (error
+       (ignore-errors (delete-file temp))
+       (signal (car err) (cdr err))))))
+
 (defun wolfram-nb-save ()
   "Save the current Org buffer back to .nb format.
 Returns t for `write-contents-functions'."
@@ -1792,8 +1980,7 @@ Returns t for `write-contents-functions'."
   (let* ((org-text (buffer-substring-no-properties (point-min) (point-max)))
          (cells (wolfram-nb--org-to-cells org-text))
          (notebook-text (wolfram-nb--cells-to-notebook cells)))
-    (with-temp-file wolfram-nb--original-file
-      (insert notebook-text))
+    (wolfram-nb--write-file-atomically wolfram-nb--original-file notebook-text)
     (setq wolfram-nb--cells nil
           wolfram-nb--cell-count (length cells))
     (set-buffer-modified-p nil)
@@ -2297,8 +2484,37 @@ An output block is an example block or a generated Output placeholder."
   (setq wolfram-nb--overlays
         (cl-remove-if-not #'overlay-buffer wolfram-nb--overlays)))
 
+(defcustom wolfram-nb-max-output-length 100000
+  "Longest evaluation output, in characters, kept in the buffer.
+Longer output is cut and a note says by how much."
+  :type 'integer
+  :group 'wolfram-nb)
+
+(defcustom wolfram-nb-max-output-line-length 4000
+  "Longest line of evaluation output kept in the buffer.
+Emacs slows down on very long lines; the rest of such a line is left out."
+  :type 'integer
+  :group 'wolfram-nb)
+
+(defun wolfram-nb--limit-output (text)
+  "Return TEXT, with long lines and a long total cut to the limits."
+  (let ((lines (mapcar (lambda (line)
+                         (if (<= (length line) wolfram-nb-max-output-line-length)
+                             line
+                           (format "%s<... %d more characters>"
+                                   (substring line 0 wolfram-nb-max-output-line-length)
+                                   (- (length line) wolfram-nb-max-output-line-length))))
+                       (split-string text "\n"))))
+    (setq text (string-join lines "\n"))
+    (if (<= (length text) wolfram-nb-max-output-length)
+        text
+      (format "%s\n<output cut: %d of %d characters shown>"
+              (substring text 0 wolfram-nb-max-output-length)
+              wolfram-nb-max-output-length (length text)))))
+
 (defun wolfram-nb--insert-example (text)
   "Insert TEXT as an example block at point and return its (START . END)."
+  (setq text (wolfram-nb--limit-output text))
   (wolfram-nb--prepare-insertion)
   (let ((start (point)))
     (insert "#+begin_example\n" (org-escape-code-in-string text)
@@ -2371,7 +2587,7 @@ POSITION is where the evaluated source block ends.  Return non-nil."
     (unless (string= (org-element-property :language element) "wolfram")
       (user-error "Not a wolfram source block"))
     (let ((params (org-element-property :parameters element)))
-      (list (org-unescape-code-in-string (org-element-property :value element))
+      (list (wolfram-nb--block-value element)
             (when (and params
                        (string-match ":format[ \t\n]+\\([^ \t\n]+\\)" params))
               (match-string 1 params))

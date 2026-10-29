@@ -1,0 +1,232 @@
+;;; test-edge.el --- Regression tests for edge cases found by fuzzing -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;; Each case here once lost or changed data.  The table-driven part reuses the
+;; fuzzer's harness (test-fuzz.el): a cell of the given style holds the given
+;; text, written as it appears in a Wolfram string, and must survive being
+;; converted to Org and back.
+
+;;; Code:
+
+(require 'ert)
+(require 'cl-lib)
+(let ((dir (file-name-directory (or load-file-name buffer-file-name default-directory))))
+  (add-to-list 'load-path dir))
+(require 'test-fuzz)
+
+(defconst wolfram-nb-edge--cases
+  '(;; commas that Org's block escaping must not eat
+    ("Input" ",*") ("Output" ",*") ("Input" ",#+x") ("Text" ",*~- \\n")
+    ("Input" "#+end_src") ("Output" "#+end_example") ("Code" ":PROPERTIES:\\n:END:")
+    ;; text that Org reads as something other than a paragraph
+    ("Text" "*") ("Text" "** (parenthesis)") ("Text" "* x") ("Text" "- a") ("Text" "1. a")
+    ("Text" "#+NAME: n\\nx1") ("Text" "#+TITLE: t") ("Text" "it's*) \\n :END:")
+    ("Text" ": fixed") ("Text" "| a | b |") ("Text" "-----") ("Text" "[fn:1]naïve")
+    ("Text" "a\\n\\nb") ("Text" "$x$<") ("Text" "src_python{1}") ("Text" "a_b") ("Text" "x^2")
+    ("Text" "\\\\") ("Text" "word \\\\\\\\") ("Text" "[[a][b]]") ("Text" "<<t>>") ("Text" "+s+")
+    ("Text" "{{{m(a)}}}") ("Text" "<2026-10-29 Thu>") ("Text" "[1/3] done") ("Text" "[50%]")
+    ;; a backslash before > is not the end of a long string
+    ("Text" "\\\\>") ("Text" "a\\\\>") ("Input" "x\\\\>")
+    ;; named characters keep a single backslash
+    ("Text" "\\[Alpha] and \\[Dash]") ("Input" "\\[Alpha] = 1") ("Text" "\\:03b1")
+    ;; headlines: words Org would take for keywords, priorities and tags
+    ("Section" "TODO list") ("Section" "DONE") ("Section" "Notes :work:") ("Section" ":a:b:")
+    ("Section" "[#A] first") ("Section" "COMMENT out") ("Subsection" "* star")
+    ("Section" "a\\nb") ("Chapter" "x [[a][b]] y") ("Section" "*)<<t>>\\tword(*")
+    ("Section" "/[#A] foo[[a][b]]/") ("Subsubsection" "\\\\alpha_b") ("Section" "$x$")
+    ;; titles, kept where they stand
+    ("Title" "TODO") ("Title" "a :tag:") ("Subtitle" "x\\ny")
+    ;; list items that do not survive as a list item
+    ("Item" "") ("Item" "a\\nb") ("Item" "foo :: bar") ("Item" "[ ] todo") ("Item" "[@3] x")
+    ("Item" "-----]") ("Item" "- x1") ("Item" ":tag:") ("Item" "*b* and /i/")
+    ("ItemNumbered" "1. text") ("ItemNumbered" "") ("Subitem" "alone") ("Subsubitem" "alone")
+    ("SubitemNumbered" "alone"))
+  "Pairs of a style and a string body that once failed.")
+
+(ert-deftest wolfram-nb-edge-test-cases-that-once-failed ()
+  (let (failures)
+    (dolist (case wolfram-nb-edge--cases)
+      (let ((result (wolfram-nb-fuzz--case (car case) (list (cadr case)))))
+        (when result (push result failures))))
+    (when failures
+      (message "%s" (wolfram-nb-fuzz--report (nreverse failures))))
+    (should-not failures)))
+
+;;; Cells in context
+
+(defun wolfram-nb-edge--roundtrip-styles (cells)
+  "Return the styles after converting the cell strings CELLS to Org and back."
+  (mapcar (lambda (s) (wolfram-nb-cell-style (wolfram-nb--parse-cell s)))
+          (cdr (wolfram-nb-fuzz--round-trip cells))))
+
+(ert-deftest wolfram-nb-edge-test-title-keeps-its-place ()
+  "A Title in the middle of a notebook is not moved to the top."
+  (should (equal (wolfram-nb-edge--roundtrip-styles
+                  '("Cell[\"a\", \"Text\"]" "Cell[\"T\", \"Title\"]" "Cell[\"b\", \"Text\"]"))
+                 '("Text" "Title" "Text"))))
+
+(ert-deftest wolfram-nb-edge-test-list-depths-follow-the-items-before ()
+  (should (equal (wolfram-nb-edge--roundtrip-styles
+                  '("Cell[\"a\", \"Item\"]" "Cell[\"b\", \"Subitem\"]"
+                    "Cell[\"c\", \"Subsubitem\"]" "Cell[\"d\", \"Subitem\"]"
+                    "Cell[\"e\", \"Item\"]" "Cell[\"f\", \"Subsubitem\"]"
+                    "Cell[\"g\", \"ItemNumbered\"]" "Cell[\"h\", \"SubitemNumbered\"]"))
+                 '("Item" "Subitem" "Subsubitem" "Subitem" "Item" "Subsubitem"
+                   "ItemNumbered" "SubitemNumbered"))))
+
+(ert-deftest wolfram-nb-edge-test-nested-items-do-not-repeat-their-children ()
+  (let ((back (cdr (wolfram-nb-fuzz--round-trip
+                    '("Cell[\"top\", \"Item\"]" "Cell[\"mid\", \"Subitem\"]"
+                      "Cell[\"low\", \"Subsubitem\"]")))))
+    (should (equal (mapcar (lambda (s) (wolfram-nb-cell-content (wolfram-nb--parse-cell s)))
+                           back)
+                   '("top" "mid" "low")))))
+
+(ert-deftest wolfram-nb-edge-test-styled-span-with-several-pieces ()
+  "Bold text holding a link or a target keeps all of its text."
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (let ((cells (wolfram-nb--org-to-cells "x *one [[http://a.b][c]] two* y\n")))
+      (should (= (length cells) 1))
+      (should (string-match-p "StyleBox\\[\"one \\[\\[http://a.b\\]\\[c\\]\\] two\", \"Bold\"\\]"
+                              (car cells))))))
+
+(ert-deftest wolfram-nb-edge-test-link-written-as-it-was ()
+  (dolist (link '("[[a][b]]" "[[https://x.y/z][label]]" "[[file:x.org][f]]" "[[x]]"))
+    (with-temp-buffer
+      (wolfram-nb-mode)
+      (let* ((cells (wolfram-nb--org-to-cells (format "see %s here *now*\n" link)))
+             (back (wolfram-nb-cell-content (wolfram-nb--parse-cell (car cells)))))
+        (should (string-match-p (regexp-quote link) back))))))
+
+;;; Files
+
+(defun wolfram-nb-edge--notebook-file (text &optional coding)
+  "Write TEXT to a temporary notebook with CODING and return its name."
+  (let ((file (make-temp-file "wolfram-nb-edge" nil ".nb"))
+        (coding-system-for-write (or coding 'utf-8-unix)))
+    (with-temp-file file (insert text))
+    file))
+
+(defconst wolfram-nb-edge--small-notebook
+  "Notebook[{\nCell[\"Title\", \"Title\"],\nCell[\"Some text\", \"Text\"],\nCell[BoxData[RowBox[{\"f\", \"[\", RowBox[{\"x\", \",\", \"y\"}], \"]\"}]], \"Input\"]\n}, WindowSize -> {400, 300}]\n"
+  "A small notebook.")
+
+(ert-deftest wolfram-nb-edge-test-windows-line-endings ()
+  (let ((file (wolfram-nb-edge--notebook-file
+               (replace-regexp-in-string "\n" "\r\n" wolfram-nb-edge--small-notebook)
+               'no-conversion)))
+    (unwind-protect
+        (with-temp-buffer
+          (wolfram-nb-mode)
+          (let ((cells (wolfram-nb--parse-notebook file)))
+            (should (= (length cells) 3))
+            (should (equal (wolfram-nb-cell-content (nth 1 cells)) "Some text"))
+            (should (equal (wolfram-nb-cell-content (nth 2 cells)) "f[x, y]"))
+            (should (string-match-p "WindowSize" (or wolfram-nb--notebook-options "")))))
+      (delete-file file))))
+
+(ert-deftest wolfram-nb-edge-test-byte-order-mark-and-utf8 ()
+  (let ((file (wolfram-nb-edge--notebook-file
+               (concat "\ufeff"
+                       (replace-regexp-in-string "Some text" "Caf\u00e9 \u65e5\u672c"
+                                                 wolfram-nb-edge--small-notebook))
+               'utf-8-unix)))
+    (unwind-protect
+        (with-temp-buffer
+          (wolfram-nb-mode)
+          (let ((cells (wolfram-nb--parse-notebook file)))
+            (should (= (length cells) 3))
+            (should (equal (wolfram-nb-cell-content (nth 1 cells)) "Café 日本"))))
+      (delete-file file))))
+
+(ert-deftest wolfram-nb-edge-test-save-leaves-no-temporary-file-behind ()
+  (let* ((dir (make-temp-file "wolfram-nb-dir" t))
+         (file (expand-file-name "n.nb" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "old"))
+          (wolfram-nb--write-file-atomically file "new text é")
+          (should (equal (with-temp-buffer
+                           (let ((coding-system-for-read 'utf-8))
+                             (insert-file-contents file))
+                           (buffer-string))
+                         "new text é"))
+          (should (equal (directory-files dir nil "\\`[^.]\\|\\`\\.[^.]") '("n.nb"))))
+      (delete-directory dir t))))
+
+(ert-deftest wolfram-nb-edge-test-failed-save-keeps-the-old-notebook ()
+  (let* ((dir (make-temp-file "wolfram-nb-dir" t))
+         (file (expand-file-name "n.nb" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "precious"))
+          (cl-letf (((symbol-function 'rename-file)
+                     (lambda (&rest _) (error "Disk full"))))
+            (should-error (wolfram-nb--write-file-atomically file "new")))
+          (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string))
+                         "precious"))
+          (should (equal (directory-files dir nil "\\`[^.]") '("n.nb")))
+          (should (equal (directory-files dir nil "wolfram-nb-save") nil)))
+      (delete-directory dir t))))
+
+;;; Editing in Org
+
+(ert-deftest wolfram-nb-edge-test-copied-cell-gets-no-duplicate-identifier ()
+  (let* ((org (concat "#+ATTR_WOLFRAM: ExpressionUUID -> \"same-id\"\n#+begin_src wolfram\n1+1\n#+end_src\n\n"
+                      "#+ATTR_WOLFRAM: ExpressionUUID -> \"same-id\"\n#+begin_src wolfram\n1+1\n#+end_src\n"))
+         (text (with-temp-buffer
+                 (wolfram-nb-mode)
+                 (wolfram-nb--cells-to-notebook (wolfram-nb--org-to-cells org)))))
+    (should (= (length (split-string text "same-id")) 2))
+    (should (= (length (split-string text "Cell\\[")) 3))))
+
+(ert-deftest wolfram-nb-edge-test-deleting-and-moving-cells-in-org ()
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (let* ((cells (let ((file (make-temp-file "wolfram-nb-edge" nil ".nb")))
+                    (unwind-protect
+                        (progn (with-temp-file file
+                                 (insert "Notebook[{Cell[\"One\", \"Section\"], Cell[\"two\", \"Text\"], Cell[\"3+3\", \"Input\"], Cell[\"Four\", \"Section\"]}]"))
+                               (wolfram-nb--parse-notebook file))
+                      (delete-file file))))
+           (org (wolfram-nb--cells-to-org cells)))
+      ;; delete the paragraph
+      (let ((without (replace-regexp-in-string "two\n\n" "" org)))
+        (should (equal (mapcar (lambda (s) (wolfram-nb-cell-style (wolfram-nb--parse-cell s)))
+                               (wolfram-nb--org-to-cells without))
+                       '("Section" "Input" "Section"))))
+      ;; move the code block above the paragraph
+      (let* ((moved (replace-regexp-in-string
+                     "two\n\n\\(#\\+begin_src wolfram\n3\\+3\n#\\+end_src\n\n\\)" "\\1two\n\n" org)))
+        (should (equal (mapcar (lambda (s) (wolfram-nb-cell-style (wolfram-nb--parse-cell s)))
+                               (wolfram-nb--org-to-cells moved))
+                       '("Section" "Input" "Text" "Section")))))))
+
+(ert-deftest wolfram-nb-edge-test-one-enormous-line-is-kept-aside ()
+  (let* ((text (make-string 30000 ?a))
+         (cell (format "Cell[\"%s\", \"Text\", ExpressionUUID -> \"long\"]" text))
+         (result (wolfram-nb-fuzz--round-trip (list cell))))
+    (should (< (apply #'max (mapcar #'length (split-string (car result) "\n"))) 2000))
+    (should (string-match-p "Large Cell Block" (car result)))
+    (should (equal (cdr result) (list cell)))))
+
+(ert-deftest wolfram-nb-edge-test-long-output-lines-are-cut ()
+  (let ((wolfram-nb-max-output-line-length 50)
+        (wolfram-nb-max-output-length 100000))
+    (let ((cut (wolfram-nb--limit-output (concat "ok\n" (make-string 500 ?y) "\nend"))))
+      (should (string-match-p "\\`ok\n" cut))
+      (should (string-match-p "<\\.\\.\\. 450 more characters>\nend\\'" cut))
+      (should (< (apply #'max (mapcar #'length (split-string cut "\n"))) 80)))))
+
+(ert-deftest wolfram-nb-edge-test-output-is-cut-to-a-limit ()
+  (let ((wolfram-nb-max-output-length 100)
+        (wolfram-nb-max-output-line-length 100000))
+    (should (equal (wolfram-nb--limit-output "short") "short"))
+    (let ((cut (wolfram-nb--limit-output (make-string 500 ?x))))
+      (should (string-prefix-p (make-string 100 ?x) cut))
+      (should (string-match-p "output cut: 100 of 500" cut))
+      (should (< (length cut) 200)))))
+
+(provide 'test-edge)
+;;; test-edge.el ends here

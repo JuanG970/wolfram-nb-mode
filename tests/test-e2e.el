@@ -216,5 +216,59 @@ up afterwards; a kernel of the buffer's own is stopped with it."
                     :type 'wolfram-nb-eval-error))
     (should (equal (wolfram-nb-e2e--kernel-eval "survivor") "9"))))
 
+(defconst wolfram-nb-e2e--nasty-notebook
+  (concat "Notebook[{\n"
+          "Cell[\"Print[\\\"* looks like a headline\\\"]; Print[\\\"#+end_example\\\"]; Print[\\\",* comma\\\"]; Print[\\\"- not a list\\\"]; Print[\\\"[[x]] and *b*\\\"]; \\\"last line\\\"\", \"Input\"],\n"
+          "Cell[\"After\", \"Text\"]\n}]\n")
+  "A notebook whose output looks like Org syntax.")
+
+(ert-deftest wolfram-nb-e2e-test-output-that-looks-like-org-is-harmless ()
+  (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--nasty-notebook
+    (wolfram-nb-eval-buffer)
+    (let ((text (wolfram-nb-e2e--buffer-text)))
+      ;; Org still sees one example block, and the paragraph after it.
+      (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 1))
+      (should (= (wolfram-nb-e2e--count "^#\\+end_example") 1))
+      (should (string-match-p "^After$" text)))
+    ;; Evaluating again replaces the output instead of adding to it.
+    (wolfram-nb-eval-buffer)
+    (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 1))
+    ;; The saved output holds the text exactly.
+    (wolfram-nb-save)
+    (let ((lit (format "%S" file)))
+      (should (equal (wolfram-nb-e2e--kernel-eval
+                      (format "StringSplit[Cases[Get[%s], Cell[s_String, \"Output\", ___] :> s, Infinity][[1]], \"\\n\"]" lit))
+                     "{* looks like a headline, #+end_example, ,* comma, - not a list, [[x]] and *b*, last line}")))
+    ;; And it opens again as the same cells.
+    (let ((again (wolfram-nb-open file)))
+      (ignore again)
+      (let ((reopened (current-buffer)))
+        (unwind-protect
+            (progn
+              (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 1))
+              (should (string-match-p "^,#\\+end_example$" (wolfram-nb-e2e--buffer-text))))
+          (kill-buffer reopened))))))
+
+(ert-deftest wolfram-nb-e2e-test-huge-output-is-kept-small ()
+  (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--notebook
+    (ignore file)
+    ;; A result of 400000 characters: wrapped by the kernel, then cut as a whole.
+    (let ((result (wolfram-nb--eval-detailed "StringRepeat[\"ab\", 200000]")))
+      (wolfram-nb--apply-eval-result (point-max) result "StringRepeat")
+      (let* ((text (wolfram-nb-e2e--buffer-text))
+             (longest (apply #'max (mapcar #'length (split-string text "\n")))))
+        (should (string-match-p "output cut" text))
+        (should (< (length text) (+ wolfram-nb-max-output-length 2000)))
+        (should (< longest 400))))
+    ;; Printed text is not wrapped by the kernel, so one line can be enormous.
+    (let ((result (wolfram-nb--eval-detailed "Print[StringRepeat[\"a\", 60000]]; 1")))
+      (wolfram-nb--apply-eval-result (point-max) result "Print")
+      (let* ((text (wolfram-nb-e2e--buffer-text))
+             (longest (apply #'max (mapcar #'length (split-string text "\n")))))
+        (should (< longest (+ wolfram-nb-max-output-line-length 100)))))
+    ;; A long list wraps over lines instead of becoming one.
+    (let ((result (wolfram-nb--eval-detailed "Range[5000]")))
+      (should (> (length (split-string (plist-get result :result) "\n")) 50)))))
+
 (provide 'test-e2e)
 ;;; test-e2e.el ends here

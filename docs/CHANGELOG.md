@@ -49,6 +49,30 @@ mode and having the kernel compare the original with the saved file:
   bold text in a headline lost its formatting
 - Nested list items (`Item`, `Subitem`, `Subsubitem`) each repeated the text of
   their sub-items
+- Seeded fuzzing (`tests/test-fuzz.el`, about 50,000 generated cells) found
+  more ways to lose text, all fixed and pinned in `tests/test-edge.el`:
+  - a block whose text began with `,*` or `,#+` lost a comma (Org already
+    removes one)
+  - a line holding just `*`, `** text`, `:END:` or `#+NAME:` changed the kind of
+    cell, or was swallowed by the line before it; Org itself is now asked
+    whether text survives as one paragraph or one list item
+  - a headline lost a leading `TODO`/`DONE`, a trailing `:tag:`, a `[#A]`
+    priority or a `COMMENT` prefix; the whole line is read instead
+  - Org objects the converter did not know (subscripts such as `begin_src`,
+    footnote references, targets, macros, a trailing `\\`) were dropped
+  - text ending in `\>` lost its last character
+  - a bracket link was rewritten (`[[a][b]]` became `[[fuzzy:a][b]]`)
+  - bold or italic text holding a link or target kept only part of its text
+  - a `Title` in the middle of a notebook was moved to the top
+  - a `Subitem` with no `Item` before it came back as an `Item`; empty items
+    and items with a newline, `foo :: bar` or `[ ]` broke the list; a leading
+    `-` or `1.` in an item's text was stripped
+  - a cell copied in Org kept its `ExpressionUUID`, giving two cells one id
+- A single line of tens of thousands of characters froze Emacs; such cells are
+  kept aside like large graphics, and evaluation output is cut to
+  `wolfram-nb-max-output-length` and `wolfram-nb-max-output-line-length`
+- Saving wrote straight over the notebook, so a failure halfway could
+  truncate it; the file is now written beside the notebook and renamed
 - Graphics cells (`GraphicsBox`, `FormBox`, ...) were written back as quoted
   strings; they are now kept verbatim
 - A cell style could be read from a string inside the box data (a plot's
