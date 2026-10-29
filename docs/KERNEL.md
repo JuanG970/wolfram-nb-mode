@@ -76,8 +76,11 @@ These facts were measured on Wolfram Engine 15.0 with a probe entitlement.
   boot and exit by itself. With `wolfram-nb-kernel-detach` (default), the
   kernel also runs under `setsid -w`, so the SIGHUP Emacs sends to a deleted
   process or at exit does not reach it and it leaves through its own exit path
-  when its input closes. This is covered by tests with a fake kernel; it has
-  not been checked against the licence server.
+  when its input closes. Checked on a real kernel after a plot: with
+  `delete-process` and with `kill -9` on Emacs itself, every process
+  (kernel, Front End, sandbox kernel) exited within 8 s and the entitlement
+  showed `StandardKernelActiveCount -> 0`. The same plot killed without
+  detaching left it at 1. Also covered by tests with a fake kernel.
 - Not established: which exact paths leaked in the first two test runs. The
   first used `delete-process` directly; the second used graceful stops, and
   rendering in flight when a buffer is killed is the main suspect.
