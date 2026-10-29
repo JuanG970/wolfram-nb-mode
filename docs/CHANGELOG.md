@@ -9,6 +9,9 @@ All notable changes to wolfram-nb-mode will be documented in this file.
   `%` carry across cells; remote kernels via `wolfram-nb-kernel-command`
 - Graphics results come back as a PNG preview plus StandardForm boxes and are
   saved as real `Cell[BoxData[GraphicsBox[...]], "Output"]` cells
+- `wolfram-nb-kernel-detach`: kernels run under `setsid -w` and exit by
+  themselves when their input closes, so a killed Emacs does not leak a
+  licence slot
 - Commands `wolfram-nb-kernel-restart` (`C-c C-z`), `wolfram-nb-kernel-quit`
   (`C-c C-q`), `wolfram-nb-kernel-info`
 - Tests: `test-kernel.el` (protocol, with a fake kernel), `test-output.el`,

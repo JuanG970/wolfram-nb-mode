@@ -78,6 +78,16 @@ example through ssh.  The command must end up running
   :type '(repeat string)
   :group 'wolfram-nb-kernel)
 
+(defcustom wolfram-nb-kernel-detach t
+  "Whether to start a kernel found automatically in its own session.
+Killing a kernel can leave its licence slot allocated on the server, and
+Emacs sends SIGHUP to a process group when a process is deleted or Emacs
+exits.  Detached with `setsid -w', the kernel does not get those signals; it
+exits by itself, and releases its licence, when its input closes.  Has no
+effect without `setsid' or when `wolfram-nb-kernel-command' is set."
+  :type 'boolean
+  :group 'wolfram-nb-kernel)
+
 (defcustom wolfram-nb-kernel-stop-grace 5
   "Seconds to wait for a kernel to exit by itself when it is stopped.
 A kernel that is killed instead of quitting may not give its licence back."
@@ -177,7 +187,11 @@ A kernel that is killed instead of quitting may not give its licence back."
   "Return the command list used to start a kernel, or nil if none is known."
   (or wolfram-nb-kernel-command
       (let ((program (wolfram-nb-kernel-find-program)))
-        (and program (cons program wolfram-nb-kernel-args)))))
+        (when program
+          (let ((command (cons program wolfram-nb-kernel-args)))
+            (if (and wolfram-nb-kernel-detach (executable-find "setsid"))
+                (append '("setsid" "-w") command)
+              command))))))
 
 (defun wolfram-nb-kernel-available-p ()
   "Return non-nil if a kernel command can be built."

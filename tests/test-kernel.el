@@ -76,6 +76,7 @@
 
 (ert-deftest wolfram-nb-kernel-test-program-and-args ()
   (let ((wolfram-nb-kernel-command nil)
+        (wolfram-nb-kernel-detach nil)
         (wolfram-nb-kernel-program "/opt/wl/WolframKernel")
         (wolfram-nb-kernel-args '("-noprompt" "-noinit")))
     (should (equal (wolfram-nb-kernel--build-command)
@@ -94,6 +95,68 @@
     (should-error (progn (wolfram-nb-kernel-start)
                          (sleep-for 0.3))
                   :type 'error)))
+
+;;; Detaching
+
+(ert-deftest wolfram-nb-kernel-test-detached-command ()
+  (let ((wolfram-nb-kernel-command nil)
+        (wolfram-nb-kernel-program "/opt/wl/WolframKernel")
+        (wolfram-nb-kernel-args '("-noprompt")))
+    (let ((wolfram-nb-kernel-detach t))
+      (if (executable-find "setsid")
+          (should (equal (wolfram-nb-kernel--build-command)
+                         '("setsid" "-w" "/opt/wl/WolframKernel" "-noprompt")))
+        (should (equal (wolfram-nb-kernel--build-command)
+                       '("/opt/wl/WolframKernel" "-noprompt")))))
+    (let ((wolfram-nb-kernel-detach nil))
+      (should (equal (wolfram-nb-kernel--build-command)
+                     '("/opt/wl/WolframKernel" "-noprompt"))))
+    ;; An explicit command is used as given.
+    (let ((wolfram-nb-kernel-command '("ssh" "box" "WolframKernel")))
+      (should (equal (wolfram-nb-kernel--build-command)
+                     '("ssh" "box" "WolframKernel"))))))
+
+(ert-deftest wolfram-nb-kernel-test-detached-kernel-survives-hard-delete ()
+  "Deleting the process must not signal a detached kernel: it quits on EOF.
+This is what keeps a killed Emacs from leaking the kernel's licence slot."
+  (unless (and (executable-find "python3") (executable-find "setsid"))
+    (ert-skip "python3 and setsid are needed"))
+  (let* ((marker (make-temp-file "wolfram-nb-marker"))
+         (process-environment (cons (concat "FAKE_KERNEL_EXIT_MARKER=" marker)
+                                    process-environment))
+         (wolfram-nb-kernel-command nil)
+         (wolfram-nb-kernel-program "python3")
+         (wolfram-nb-kernel-args (list wolfram-nb-test--fake-kernel))
+         (wolfram-nb-kernel-detach t))
+    (delete-file marker)
+    (let ((k (wolfram-nb-kernel-start)))
+      (should (equal (car (wolfram-nb-kernel-command k)) "setsid"))
+      (should (equal (plist-get (wolfram-nb-test--eval k "x=1;") :result) ""))
+      ;; The hard way: no QUIT, just delete the process.
+      (delete-process (wolfram-nb-kernel-process k))
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (not (file-exists-p marker)) (< (float-time) deadline))
+          (sleep-for 0.1)))
+      (should (file-exists-p marker)))
+    (when (file-exists-p marker) (delete-file marker))))
+
+(ert-deftest wolfram-nb-kernel-test-undetached-kernel-is-signalled ()
+  "Control for the test above: without detaching, the hard delete kills it."
+  (unless (executable-find "python3") (ert-skip "python3 is not available"))
+  (let* ((marker (make-temp-file "wolfram-nb-marker"))
+         (process-environment (cons (concat "FAKE_KERNEL_EXIT_MARKER=" marker)
+                                    process-environment))
+         (wolfram-nb-kernel-command nil)
+         (wolfram-nb-kernel-program "python3")
+         (wolfram-nb-kernel-args (list wolfram-nb-test--fake-kernel))
+         (wolfram-nb-kernel-detach nil))
+    (delete-file marker)
+    (let ((k (wolfram-nb-kernel-start)))
+      (wolfram-nb-test--eval k "x=1;")
+      (delete-process (wolfram-nb-kernel-process k))
+      (sleep-for 1.5)
+      (should-not (file-exists-p marker)))
+    (when (file-exists-p marker) (delete-file marker))))
 
 ;;; Against the fake kernel
 

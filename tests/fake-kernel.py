@@ -16,6 +16,7 @@ commands instead of Wolfram code:
     anything else    echoed back as the result
 """
 import base64
+import os
 import sys
 import time
 
@@ -32,6 +33,14 @@ def b64(text):
 def emit(rid, tag, payload):
     sys.stdout.write("@@WNB %s %s %s\n" % (rid, tag, payload))
     sys.stdout.flush()
+
+
+def mark_clean_exit():
+    """Record that the kernel left through its own exit path, not a signal."""
+    path = os.environ.get("FAKE_KERNEL_EXIT_MARKER")
+    if path:
+        with open(path, "w") as marker:
+            marker.write("clean\n")
 
 
 def main():
@@ -88,6 +97,7 @@ def main():
             continue
         emit(rid, "RESULT", b64(result))
         emit(rid, "DONE", "0.01 ok")
+    mark_clean_exit()
 
 
 if __name__ == "__main__":
