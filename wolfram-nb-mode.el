@@ -238,16 +238,43 @@ Org reads the depth of an item from the item before it.  The value is
     "Which" "While" "With" "WriteString")
   "Common Wolfram Language built-in functions for highlighting.")
 
+(defun wolfram-nb--in-wolfram-src-p (pos)
+  "Return non-nil when POS is inside the body of a `wolfram' source block."
+  (save-excursion
+    (goto-char pos)
+    (and (re-search-backward "^[ \t]*#\\+\\(?:begin\\|end\\)_" nil t)
+         (looking-at "[ \t]*#\\+begin_src[ \t]+wolfram\\(?:[ \t\n]\\|\\'\\)")
+         (> pos (line-end-position)))))
+
+(defun wolfram-nb--code-matcher (regexp)
+  "Return a font-lock matcher for REGEXP that only matches in Wolfram code.
+Prose, headlines, lists and output blocks of the notebook are left to Org."
+  (lambda (limit)
+    (let ((case-fold-search nil)
+          found)
+      (while (and (not found) (re-search-forward regexp limit t))
+        (when (save-match-data (wolfram-nb--in-wolfram-src-p (match-beginning 0)))
+          (setq found t)))
+      found)))
+
 (defvar wolfram-nb-font-lock-keywords
-  `((,(regexp-opt wolfram-nb--builtin-functions 'symbols) . font-lock-builtin-face)
-    ("\\b\\([A-Z][a-zA-Z0-9]*\\)\\b" . font-lock-type-face)
-    ("\\b\\([a-z][a-zA-Z0-9]*\\)\\s-*\\[" 1 font-lock-function-name-face)
-    ("\\b\\([a-z][a-zA-Z0-9]*\\)_+" 1 font-lock-variable-name-face)
-    (,(regexp-opt '(":=" "=" "->" ":>" "/;" "/." "@@" "@@@" "/@"
-                    "~~" "|" ".." "..." "&&" "||"))
-     . font-lock-keyword-face)
-    ("(\\*.*?\\*)" . font-lock-comment-face))
-  "Font-lock keywords for Wolfram Language.")
+  `((,(wolfram-nb--code-matcher (regexp-opt wolfram-nb--builtin-functions 'symbols))
+     (0 font-lock-builtin-face prepend))
+    (,(wolfram-nb--code-matcher "\\b\\([A-Z][a-zA-Z0-9]*\\)\\b")
+     (1 font-lock-type-face prepend))
+    (,(wolfram-nb--code-matcher "\\b\\([a-z][a-zA-Z0-9]*\\)\\s-*\\[")
+     (1 font-lock-function-name-face prepend))
+    (,(wolfram-nb--code-matcher "\\b\\([a-z][a-zA-Z0-9]*\\)_+")
+     (1 font-lock-variable-name-face prepend))
+    (,(wolfram-nb--code-matcher
+       (regexp-opt '(":=" "=" "->" ":>" "/;" "/." "@@" "@@@" "/@"
+                     "~~" "|" ".." "..." "&&" "||")))
+     (0 font-lock-keyword-face prepend))
+    (,(wolfram-nb--code-matcher "(\\*.*?\\*)")
+     (0 font-lock-comment-face prepend)))
+  "Font-lock keywords for Wolfram Language.
+They apply only inside `wolfram' source blocks, and are added after Org's own
+fontification so that Org does not paint over them.")
 
 ;;;; String escaping (fast, using replace-regexp-in-string)
 
@@ -3165,7 +3192,7 @@ Cell[...] structure for serialization back to Notebook format.
 \\{wolfram-nb-mode-map}"
   (setq-local write-contents-functions '(wolfram-nb-save))
   (setq-local imenu-create-index-function #'wolfram-nb--imenu-create-index)
-  (font-lock-add-keywords nil wolfram-nb-font-lock-keywords)
+  (font-lock-add-keywords nil wolfram-nb-font-lock-keywords 'append)
   (message "Wolfram-NB mode. C-c C-c eval | C-x C-s save | C-c C-n new block | C-c C-s session"))
 
 ;;;; Auto-mode

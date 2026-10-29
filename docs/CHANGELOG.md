@@ -111,6 +111,11 @@ mode and having the kernel compare the original with the saved file:
     newline `x + y`) broke the reply, because the lines came back as three
     values spliced into one list. Lines now run as one sequence and the result
     is the last value
+- Wolfram highlighting was applied to the whole buffer, so capitalised words
+  in text, headlines and lists were painted as type names and words such as
+  "function" as built-ins, while the code blocks themselves were repainted by
+  Org and showed no highlighting. It now applies only inside `wolfram` source
+  blocks, after Org's own fontification, and matches case-sensitively
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline
