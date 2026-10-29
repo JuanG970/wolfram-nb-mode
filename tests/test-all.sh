@@ -88,7 +88,11 @@ echo "9. End-to-End Notebook Tests"
 run_test_file "End-to-end tests" "test-e2e.el"
 
 echo ""
-echo "10. Byte-compilation"
+echo "10. Notebook Corpus Tests"
+run_test_file "Corpus tests" "test-corpus.el"
+
+echo ""
+echo "11. Byte-compilation"
 set +e
 BC_RESULT=$(emacs --batch -Q -L "$ROOT_DIR" \
     --eval "(setq byte-compile-error-on-warn t)" \

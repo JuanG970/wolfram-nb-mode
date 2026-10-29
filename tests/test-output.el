@@ -293,12 +293,63 @@
                  "Input"))
   (should-not (wolfram-nb--cell-style-info "Cell[BoxData[x]]")))
 
-(ert-deftest wolfram-nb-output-test-options-kept-on-input-box-cells ()
-  "Options such as ExpressionUUID survive on BoxData Input cells."
-  (let ((cells (cdr (wolfram-nb-test--cells-of
-                     (concat "Notebook[{\n"
-                             "Cell[BoxData[RowBox[{\"1\", \"+\", \"1\"}]], \"Input\", CellChangeTimes -> {1, 2}, ExpressionUUID -> \"u1\"]\n}]\n")))))
-    (should (equal cells '("Cell[\"1+1\", \"Input\", CellChangeTimes -> {1, 2}, ExpressionUUID -> \"u1\"]")))))
+(ert-deftest wolfram-nb-output-test-unedited-box-cell-is-written-back-untouched ()
+  "An Input cell that was not edited keeps its boxes and its options."
+  (let* ((cell "Cell[BoxData[RowBox[{\"f\", \"[\", RowBox[{\"x\", \",\", \"y\"}], \"]\"}]], \"Input\", CellChangeTimes -> {1, 2}, ExpressionUUID -> \"u1\"]")
+         (result (wolfram-nb-test--cells-of (concat "Notebook[{\n" cell "\n}]\n"))))
+    ;; The editable text is real code ...
+    (should (string-match-p "^f\\[x, y\\]$" (car result)))
+    ;; ... and saving without editing returns the cell exactly.
+    (should (equal (cdr result) (list cell)))))
+
+(ert-deftest wolfram-nb-output-test-edited-box-cell-becomes-a-string-cell ()
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (let* ((file (make-temp-file "wolfram-nb-test" nil ".nb")))
+      (unwind-protect
+          (progn
+            (with-temp-file file
+              (insert "Notebook[{\nCell[BoxData[RowBox[{\"f\", \"[\", RowBox[{\"x\", \",\", \"y\"}], \"]\"}]], \"Input\", ExpressionUUID -> \"u1\"]\n}]\n"))
+            (let* ((org (wolfram-nb--cells-to-org (wolfram-nb--parse-notebook file)))
+                   (edited (replace-regexp-in-string "f\\[x, y\\]" "g[x, y, z]" org)))
+              (should (equal (wolfram-nb--org-to-cells edited)
+                             '("Cell[\"g[x, y, z]\", \"Input\", ExpressionUUID -> \"u1\"]")))
+              ;; Changing it back finds the original boxes again.
+              (should (string-prefix-p "Cell[BoxData[RowBox[{\"f\""
+                                       (car (wolfram-nb--org-to-cells org))))))
+        (delete-file file)))))
+
+(ert-deftest wolfram-nb-output-test-box-to-code-conversion ()
+  "Box data becomes the code the Front End would evaluate."
+  (dolist (case '(("BoxData[RowBox[{\"f\", \"[\", RowBox[{\"x\", \",\", \"y\"}], \"]\"}]]" . "f[x, y]")
+                  ("BoxData[RowBox[{\"a\", \"=\", RowBox[{\"{\", RowBox[{\"1\", \",\", \"2\", \",\", \"3\"}], \"}\"}]}]]" . "a={1, 2, 3}")
+                  ("BoxData[RowBox[{\"Plot\", \"[\", RowBox[{RowBox[{\"Sin\", \"[\", \"x\", \"]\"}], \",\", RowBox[{\"{\", RowBox[{\"x\", \",\", \"0\", \",\", \"6\"}], \"}\"}]}], \"]\"}]]" . "Plot[Sin[x], {x, 0, 6}]")
+                  ("BoxData[RowBox[{\"x\", \" \", \"y\"}]]" . "x y")
+                  ("BoxData[RowBox[{\"x\", \"y\"}]]" . "x y")
+                  ("BoxData[RowBox[{\"a\", \"-\", \"-\", \"b\"}]]" . "a- -b")
+                  ("BoxData[SuperscriptBox[\"x\", \"2\"]]" . "x^2")
+                  ("BoxData[SuperscriptBox[\"x\", RowBox[{\"n\", \"+\", \"1\"}]]]" . "x^(n+1)")
+                  ("BoxData[FractionBox[RowBox[{\"a\", \"+\", \"1\"}], \"b\"]]" . "(a+1)/b")
+                  ("BoxData[SqrtBox[\"x\"]]" . "Sqrt[x]")
+                  ("BoxData[SubscriptBox[\"a\", \"1\"]]" . "Subscript[a, 1]")
+                  ("BoxData[RowBox[{\"f\", \"[\", \"\\\"hi\\\"\", \"]\"}]]" . "f[\"hi\"]")
+                  ("BoxData[RowBox[{\"a\", \"\\[IndentingNewLine]\", \"b\"}]]" . "a\nb")
+                  ("BoxData[GridBox[{{\"1\", \"2\"}, {\"3\", \"4\"}}]]" . "{{1, 2}, {3, 4}}")
+                  ("BoxData[InterpretationBox[\"x\", Rational[1, 2]]]" . "Rational[1, 2]")
+                  ("BoxData[TagBox[RowBox[{\"a\", \"+\", \"b\"}], \"Foo\"]]" . "a+b")))
+    (should (equal (wolfram-nb--boxes-to-code (car case)) (cdr case)))))
+
+(ert-deftest wolfram-nb-output-test-unknown-boxes-are-not-code ()
+  "Boxes the converter does not know are kept verbatim, never guessed at."
+  (dolist (boxes '("BoxData[TemplateBox[{\"a\"}, \"Foo\"]]"
+                   "BoxData[ButtonBox[\"x\"]]"
+                   "BoxData[RowBox[{\"a\", ButtonBox[\"x\"]}]]"
+                   "BoxData[\"a\", \"b\"]"
+                   "BoxData[RowBox[{\"a\"}]"))
+    (should-not (wolfram-nb--boxes-to-code boxes)))
+  (let ((cell "Cell[BoxData[TemplateBox[{\"a\"}, \"Foo\"]], \"Input\"]"))
+    (should (equal (cdr (wolfram-nb-test--cells-of (concat "Notebook[{\n" cell "\n}]\n")))
+                   (list cell)))))
 
 (ert-deftest wolfram-nb-output-test-graphics-roundtrip-is-idempotent ()
   "Saving twice gives the same cells."
@@ -307,11 +358,12 @@
          (twice (cdr (wolfram-nb-test--cells-of nb))))
     (should (equal once twice))))
 
-(ert-deftest wolfram-nb-output-test-plain-input-boxes-still-become-code ()
-  "Ordinary Input boxes are still turned into editable code."
-  (let ((cells (cdr (wolfram-nb-test--cells-of wolfram-nb-test--graphics-notebook))))
-    (should (cl-some (lambda (c) (string-match-p "\\`Cell\\[\"Plot\\[Sin\\[x\\]\\]\", \"Input\"" c))
-                     cells))))
+(ert-deftest wolfram-nb-output-test-plain-input-boxes-show-as-code ()
+  "Ordinary Input boxes are shown as editable code and saved unchanged."
+  (let ((result (wolfram-nb-test--cells-of wolfram-nb-test--graphics-notebook)))
+    (should (string-match-p "^Plot\\[Sin\\[x\\]\\]$" (car result)))
+    (should (member "Cell[BoxData[RowBox[{\"Plot\", \"[\", RowBox[{\"Sin\", \"[\", \"x\", \"]\"}], \"]\"}]], \"Input\"]"
+                    (cdr result)))))
 
 (provide 'test-output)
 ;;; test-output.el ends here

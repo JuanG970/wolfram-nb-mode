@@ -15,9 +15,40 @@ All notable changes to wolfram-nb-mode will be documented in this file.
 - Commands `wolfram-nb-kernel-restart` (`C-c C-z`), `wolfram-nb-kernel-quit`
   (`C-c C-q`), `wolfram-nb-kernel-info`
 - Tests: `test-kernel.el` (protocol, with a fake kernel), `test-output.el`,
-  `test-e2e.el`
+  `test-e2e.el`, and `test-corpus.el` with a generated corpus of 13 notebooks
+  in `tests/corpus` (see its README)
 
 ### Fixed
+Found by running a real Front End notebook and a synthetic corpus through the
+mode and having the kernel compare the original with the saved file:
+- The Front End's trailing cache comment lists every cell as `Cell[...]`; the
+  parser imported those as extra body cells (about as many junk cells as real
+  ones), and the notebook options after the cell list, including a docked
+  toolbar, were dropped. Only the notebook's own cell list is read now and the
+  options are kept as they are
+- Box data lost commas, spaces and operators when turned into code
+  (`f[x, y]` became `f[xy]`, `Plot[Sin[x],{x,0,6}]` became
+  `Plot[Sin[x]{x06}]`). A real converter now handles rows, scripts, fractions,
+  roots, grids and typeset sums, products, integrals, derivatives and limits;
+  anything it does not know stays verbatim rather than being guessed
+- A cell that is not edited is written back exactly as it was read: its boxes,
+  options, formatting and `ExpressionUUID`. Only an edited cell is rebuilt
+- Cell options that the Front End wraps over several lines ended the one-line
+  `#+ATTR_WOLFRAM:` keyword and left stray Text cells
+- A `CellLabel` was added again on every save
+- `Code` became `Input`, `Print` became `Output`, options on Text cells were
+  dropped
+- Text with blank lines became several cells, and a line starting with `*`,
+  `-`, `1.`, `#` or `|` changed the kind of cell. Such cells are kept in a
+  block that Org does not interpret
+- `*`, `/` and `_` in plain text were read as formatting; plain URLs became
+  `[[links]]`; `\[Dash]`-style character escapes had their backslash doubled
+- Rich text: a space inside an italic span stopped it being italic, a trailing
+  newline was added on every save, hyperlinks and inline cells were dumped as
+  raw Wolfram code (they are now kept as `⟦wnb:N⟧` tokens and put back), and
+  bold text in a headline lost its formatting
+- Nested list items (`Item`, `Subitem`, `Subsubitem`) each repeated the text of
+  their sub-items
 - Graphics cells (`GraphicsBox`, `FormBox`, ...) were written back as quoted
   strings; they are now kept verbatim
 - A cell style could be read from a string inside the box data (a plot's
