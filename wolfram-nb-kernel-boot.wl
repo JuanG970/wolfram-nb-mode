@@ -66,8 +66,17 @@ evaluate[code_String, timeout_] :=
         $Line++;
         outStream = OpenWrite[FormatType -> OutputForm];
         msgStream = OpenWrite[FormatType -> OutputForm];
+        (* Lines are separate expressions: Hold[a;, b;, c].  Run them as one
+           sequence so the result is the last value, not a Sequence that would
+           splice into the reply. *)
         held = Block[{$Messages = {msgStream}},
-            ToExpression[code, InputForm, Hold]
+            Replace[
+                ToExpression[code, InputForm, Hold],
+                {
+                    Hold[] :> Hold[Null],
+                    Hold[e__] :> Hold[CompoundExpression[e]]
+                }
+            ]
         ];
         result =
             Block[{$Output = {outStream}, $Messages = {msgStream}},

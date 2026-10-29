@@ -199,10 +199,26 @@ A kernel that is killed instead of quitting may not give its licence back."
 
 ;;;; Wire format
 
+(defun wolfram-nb-kernel--boot-file ()
+  "Return the path of `wolfram-nb-kernel-boot.wl', or signal an error.
+It is looked for next to the loaded library, then next to the source file
+the library was built from: a package manager may link only the .el files
+into its build directory."
+  (let* ((name "wolfram-nb-kernel-boot.wl")
+         (source (let ((el (locate-library "wolfram-nb-kernel.el" t)))
+                   (and el (file-name-directory (file-truename el)))))
+         (dirs (delq nil (delete-dups (list wolfram-nb-kernel--directory source)))))
+    (or (cl-some (lambda (dir)
+                   (let ((file (expand-file-name name dir)))
+                     (and (file-exists-p file) file)))
+                 dirs)
+        (signal 'wolfram-nb-kernel-error
+                (list (format "%s not found in %s; install it with the package (recipe :files \"*.el\" \"*.wl\")"
+                              name (mapconcat #'identity dirs ", ")))))))
+
 (defun wolfram-nb-kernel--boot-line ()
   "Return the single input line that installs the evaluation loop."
-  (let* ((file (expand-file-name "wolfram-nb-kernel-boot.wl"
-                                 wolfram-nb-kernel--directory))
+  (let* ((file (wolfram-nb-kernel--boot-file))
          (source (with-temp-buffer
                    (insert-file-contents file)
                    (buffer-string)))
@@ -410,7 +426,8 @@ when no kernel executable can be found."
     (unless command
       (signal 'wolfram-nb-kernel-error
               '("No WolframKernel found; set `wolfram-nb-kernel-program' or `wolfram-nb-kernel-command'")))
-    (let* ((kernel (wolfram-nb-kernel--make :command command))
+    (let* ((boot-line (wolfram-nb-kernel--boot-line))
+           (kernel (wolfram-nb-kernel--make :command command))
            (stderr (generate-new-buffer " *wolfram-nb-kernel-stderr*"))
            (process (condition-case err
                         (make-process
@@ -435,7 +452,7 @@ when no kernel executable can be found."
       (setf (wolfram-nb-kernel-process kernel) process
             (wolfram-nb-kernel-stderr-buffer kernel) stderr)
       ;; A kernel that dies at once is reported by the sentinel.
-      (ignore-errors (process-send-string process (wolfram-nb-kernel--boot-line)))
+      (ignore-errors (process-send-string process boot-line))
       (setf (wolfram-nb-kernel-startup-timer kernel)
             (run-at-time wolfram-nb-kernel-startup-timeout nil
                          (lambda ()

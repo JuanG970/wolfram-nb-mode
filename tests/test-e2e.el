@@ -170,6 +170,14 @@ up afterwards; a kernel of the buffer's own is stopped with it."
                                                (buffer-string)))))
           (kill-buffer second))))))
 
+(ert-deftest wolfram-nb-e2e-test-lines-are-one-cell ()
+  "Statements on separate lines evaluate in order and give the last value."
+  (wolfram-nb-e2e--with-notebook file "Notebook[{}]\n"
+    (should (equal (wolfram-nb-e2e--kernel-eval "x = 5;\ny = 10;\nx + y") "15"))
+    (should (equal (wolfram-nb-e2e--kernel-eval "x * y") "50"))
+    (should (equal (wolfram-nb-e2e--kernel-eval "z = 1;\nz + 1;\n") ""))
+    (should (equal (wolfram-nb-e2e--kernel-eval "") ""))))
+
 (ert-deftest wolfram-nb-e2e-test-kernel-restart-forgets-state ()
   (let ((wolfram-nb-e2e--own-kernel t))
     (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--notebook

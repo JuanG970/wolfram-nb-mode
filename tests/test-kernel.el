@@ -57,6 +57,30 @@
                              line))
     (should (= (length (split-string line "\n" t)) 1))))
 
+(ert-deftest wolfram-nb-kernel-test-boot-file-found-through-linked-source ()
+  "A build directory holding only a link to the .el still finds the bootstrap."
+  (let ((repo wolfram-nb-kernel--directory)
+        (build (make-temp-file "wnb-build" t)))
+    (unwind-protect
+        (progn
+          (make-symbolic-link (expand-file-name "wolfram-nb-kernel.el" repo)
+                              (expand-file-name "wolfram-nb-kernel.el" build))
+          (let ((load-path (cons build load-path))
+                (wolfram-nb-kernel--directory (file-name-as-directory build)))
+            (should (equal (file-truename (wolfram-nb-kernel--boot-file))
+                           (file-truename
+                            (expand-file-name "wolfram-nb-kernel-boot.wl" repo))))))
+      (delete-directory build t))))
+
+(ert-deftest wolfram-nb-kernel-test-missing-boot-file-fails-before-starting ()
+  "Without the bootstrap, start signals an error and launches nothing."
+  (let ((wolfram-nb-kernel--directory "/nonexistent/")
+        (before wolfram-nb-kernel--registry))
+    (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+      (should-error (wolfram-nb-kernel-start '("cat"))
+                    :type 'wolfram-nb-kernel-error))
+    (should (equal wolfram-nb-kernel--registry before))))
+
 (ert-deftest wolfram-nb-kernel-test-boot-file-defines-protocol ()
   "The bootstrap file speaks the protocol this client expects."
   (let ((source (with-temp-buffer

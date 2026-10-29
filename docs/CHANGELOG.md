@@ -100,6 +100,17 @@ mode and having the kernel compare the original with the saved file:
     contained the internal backslash mark
   - a paragraph starting with `#`, `:word:` at the end of a line, or
     `\begin{` / `\end{` changed the kind of cell
+- Found by trying the mode in a GUI Emacs installed with straight:
+  - the kernel never started: the bootstrap script `wolfram-nb-kernel-boot.wl`
+    was missing from the build directory (only the .el files are linked), the
+    error was swallowed, and the kernel waited for input that was never sent
+    until the 120 s timeout. The script is now also looked for next to the
+    source the library was linked from, and a missing script is an error
+    before any process starts
+  - a cell with statements on separate lines (`x = 5;` newline `y = 10;`
+    newline `x + y`) broke the reply, because the lines came back as three
+    values spliced into one list. Lines now run as one sequence and the result
+    is the last value
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline
