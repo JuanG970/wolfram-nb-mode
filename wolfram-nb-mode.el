@@ -59,9 +59,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'org)
 (require 'org-element)
 (require 'url-http)
+(require 'wolfram-nb-kernel)
 
 ;;;; Custom error types
 
@@ -124,9 +126,12 @@ When nil, evaluation falls back to wolframscript."
   :type 'integer
   :group 'wolfram-nb)
 
-(defcustom wolfram-nb-session-path "/"
-  "HTTP path for evaluation requests on the session server."
-  :type 'string
+(defcustom wolfram-nb-use-kernel t
+  "Whether evaluation uses one persistent kernel per notebook buffer.
+With a kernel, definitions made in one cell are visible in the next and
+graphics are rendered by the kernel that produced them.  When nil, or when no
+kernel can be found, every evaluation starts a fresh `wolframscript'."
+  :type 'boolean
   :group 'wolfram-nb)
 
 (defcustom wolfram-nb-rasterize-graphics t
@@ -172,6 +177,18 @@ Set by `wolfram-nb--refresh-session' from #+WOLFRAM_SESSION: or TaggingRules.")
 
 (defvar-local wolfram-nb--session-raw nil
   "Raw session string from #+WOLFRAM_SESSION: or TaggingRules.")
+
+(defvar-local wolfram-nb--large-cells-cache nil
+  "Buffer-local hash table mapping placeholder IDs to large cell contents.")
+
+(defvar-local wolfram-nb--png-cache nil
+  "Buffer-local hash table mapping placeholder IDs to rendered PNG bytes.")
+
+(defvar-local wolfram-nb--kernel nil
+  "The persistent `wolfram-nb-kernel' of this notebook buffer, or nil.")
+
+(defvar-local wolfram-nb--async-process nil
+  "Current one-shot async evaluation process, if any.")
 
 ;;;; Font-lock
 
@@ -379,13 +396,17 @@ Handles StyleBox for Bold/Italic formatting."
       result)))
 
 
+(defconst wolfram-nb--complex-box-regexp
+  "GraphicsBox\\|Graphics3DBox\\|RasterBox\\|FormBox\\|GridBox\\|DynamicBox\\|DynamicModuleBox\\|TemplateBox\\|PanelBox"
+  "Box heads whose cells cannot be reduced to code and must be kept verbatim.")
+
 (defun wolfram-nb--extract-boxdata-code (cell-string)
   "Extract code strings from a BoxData CELL-STRING.
-If complex content (GraphicsBox, etc.) is detected, returns the raw content
-string.  Otherwise pulls all string literals from RowBox structures and
-joins them."
-  (if (string-match-p "GraphicsBox\\|RasterBox\\|FormBox\\|GridBox" cell-string)
-      (or (wolfram-nb--extract-head-argument cell-string "BoxData") cell-string)
+If complex content (GraphicsBox, etc.) is detected, returns the whole
+`BoxData[...]' string so that it is written back unchanged.  Otherwise pulls
+all string literals from RowBox structures and joins them."
+  (if (string-match-p wolfram-nb--complex-box-regexp cell-string)
+      (string-trim cell-string)
     (let ((strings '())
           (start 0))
       (while (string-match "\"\\([^\"\\\\]*\\(?:\\\\\\(?:.\\|\n\\)[^\"\\\\]*\\)*\\)\"" cell-string start)
@@ -424,6 +445,43 @@ Returns a cons cell (style . options)."
         (setq options (wolfram-nb--unescape-string (match-string 1 attr)))))
     (cons style options)))
 
+(defun wolfram-nb--skip-top-level-arg ()
+  "Move point over one top-level argument, stopping at its closing , or ]."
+  (let ((done nil))
+    (while (and (not done) (not (eobp)))
+      (if (re-search-forward "[][{}\",]" nil t)
+          (let ((char (char-before)))
+            (goto-char (match-beginning 0))
+            (if (memq char '(?, ?\]))
+                (setq done t)
+              (forward-sexp 1)))
+        (goto-char (point-max))))))
+
+(defun wolfram-nb--cell-style-info (cell-string)
+  "Return (STYLE . END) for the Cell[...] in CELL-STRING, or nil.
+STYLE is the second argument when it is a string literal, and END is where
+it ends as an index into CELL-STRING.  The argument is located by walking
+the top-level arguments, so strings inside box data cannot be mistaken for
+it."
+  (or (ignore-errors
+        (with-temp-buffer
+          (set-syntax-table wolfram-nb--parse-syntax-table)
+          (insert cell-string)
+          (goto-char (point-min))
+          (when (looking-at "Cell\\[")
+            (goto-char (match-end 0))
+            (wolfram-nb--skip-top-level-arg)
+            (when (looking-at ",[ \t\n]*")
+              (goto-char (match-end 0))
+              (let ((start (point)))
+                (wolfram-nb--skip-top-level-arg)
+                (let ((arg (string-trim
+                            (buffer-substring-no-properties start (point)))))
+                  (when (string-match "\\`\"\\([A-Za-z][A-Za-z0-9]*\\)\"\\'" arg)
+                    (cons (match-string 1 arg) (1- (point))))))))))
+      (when (string-match "\\],[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
+        (cons (match-string 1 cell-string) (match-end 0)))))
+
 (defun wolfram-nb--parse-cell (cell-string)
   "Parse a single Cell[...] structure from CELL-STRING.
 Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
@@ -434,12 +492,13 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
 
    ;; BoxData cell: Cell[BoxData[...], "Style", ...]
    ((string-match "\\`Cell\\[BoxData\\[" cell-string)
-    (when (string-match "\\],[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
-      (let ((style (match-string 1 cell-string))
-            ;; Extract only the BoxData[...] content (first argument), not the whole cell
-            (boxdata-content (wolfram-nb--extract-first-argument cell-string))
-            (code nil)
-            (raw-options (wolfram-nb--extract-cell-options cell-string (match-end 0))))
+    (when-let ((info (wolfram-nb--cell-style-info cell-string)))
+      (let* ((style (car info))
+             (style-end (cdr info))
+             ;; Extract only the BoxData[...] content (first argument), not the whole cell
+             (boxdata-content (wolfram-nb--extract-first-argument cell-string))
+             (code nil)
+             (raw-options (wolfram-nb--extract-cell-options cell-string style-end)))
         ;; Now extract code from the boxdata-content, not the entire cell
         (setq code (wolfram-nb--extract-boxdata-code boxdata-content))
         (let ((options nil))
@@ -453,11 +512,12 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
 
    ;; TextData cell: Cell[TextData[{...}], "Style"]
    ((string-match "\\`Cell\\[TextData\\[" cell-string)
-    (when (string-match "\\],[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
-      (let ((style (match-string 1 cell-string))
-            ;; Extract only the TextData content (the argument of TextData[...])
-            (textdata-wrapper (wolfram-nb--extract-first-argument cell-string))
-            (raw-options (wolfram-nb--extract-cell-options cell-string (match-end 0))))
+    (when-let ((info (wolfram-nb--cell-style-info cell-string)))
+      (let* ((style (car info))
+             (style-end (cdr info))
+             ;; Extract only the TextData content (the argument of TextData[...])
+             (textdata-wrapper (wolfram-nb--extract-first-argument cell-string))
+             (raw-options (wolfram-nb--extract-cell-options cell-string style-end)))
         ;; Unwrap TextData[...] to get its argument
         (let* ((textdata-content (wolfram-nb--extract-head-argument textdata-wrapper "TextData"))
                (content (wolfram-nb--parse-textdata-content textdata-content))
@@ -690,68 +750,109 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
                       rich))
             res-cons)))))))
 
+(defun wolfram-nb--stash-cell-content (content)
+  "Keep CONTENT in the buffer-local cell cache and return its placeholder ID."
+  (unless wolfram-nb--large-cells-cache
+    (setq wolfram-nb--large-cells-cache (make-hash-table :test 'equal)))
+  (let ((id (format "large-cell-%d"
+                    (1+ (hash-table-count wolfram-nb--large-cells-cache)))))
+    (puthash id content wolfram-nb--large-cells-cache)
+    id))
+
+(defun wolfram-nb--format-size (len)
+  "Format the character count LEN as a short size string."
+  (if (>= len 1048576)
+      (format "%.1fM" (/ (float len) 1048576.0))
+    (format "%.1fK" (/ (float len) 1024.0))))
+
+(defun wolfram-nb--box-cell-p (content)
+  "Return non-nil if CONTENT is verbatim box data that must not be edited."
+  (and (string-prefix-p "BoxData[" content)
+       (string-match-p wolfram-nb--complex-box-regexp content)))
+
+(defun wolfram-nb--placeholder-block (id style raw-opts label)
+  "Return the Org text of a raw placeholder block for cached cell ID.
+STYLE is the cell style, RAW-OPTS its Wolfram options and LABEL describes it."
+  (format "#+ATTR_WOLFRAM: :style \"%s\" :id \"%s\"%s\n#+begin_src wolfram-raw\n%s\n#+end_src\n\n"
+          style id
+          (if raw-opts
+              (format " :options \"%s\"" (wolfram-nb--escape-string raw-opts))
+            "")
+          label))
+
 (defun wolfram-nb--cell-to-org (cell)
   "Convert a `wolfram-nb-cell' CELL to Org-mode text."
   (let ((content (wolfram-nb-cell-content cell))
         (style (wolfram-nb-cell-style cell))
         (raw-opts (wolfram-nb-cell-raw-options cell)))
-    (cond
-     ;; Special Keywords
-     ((string= style "Title")
-      (format "#+TITLE: %s\n\n" content))
-     ((string= style "Subtitle")
-      (format "#+SUBTITLE: %s\n\n" content))
-     
-     ;; Headlines
-     ((assoc style wolfram-nb-headline-styles)
-      (let ((level (cdr (assoc style wolfram-nb-headline-styles))))
-        (format "%s %s\n%s"
-                (make-string level ?*)
-                content
-                (if raw-opts (format ":PROPERTIES:\n:WOLFRAM_OPTIONS: %s\n:END:\n" raw-opts) ""))))
+    (if (or (wolfram-nb--box-cell-p content)
+            (and (> (length content) 50000)
+                 (string-match-p "BoxData\\|GraphicsBox\\|RasterBox\\|CompressedData" content)))
+        (wolfram-nb--placeholder-block
+         (wolfram-nb--stash-cell-content content)
+         style raw-opts
+         (if (> (length content) 50000)
+             (format "<Large Cell Block (%s) - Hidden to prevent Emacs from freezing. Will be preserved on save.>"
+                     (wolfram-nb--format-size (length content)))
+           (format "<Graphics Block (%s) - kept verbatim and preserved on save.>"
+                   (wolfram-nb--format-size (length content)))))
+      (cond
+       ;; Special Keywords
+       ((string= style "Title")
+        (format "#+TITLE: %s\n\n" content))
+       ((string= style "Subtitle")
+        (format "#+SUBTITLE: %s\n\n" content))
+       
+       ;; Headlines
+       ((assoc style wolfram-nb-headline-styles)
+        (let ((level (cdr (assoc style wolfram-nb-headline-styles))))
+          (format "%s %s\n%s"
+                  (make-string level ?*)
+                  content
+                  (if raw-opts (format ":PROPERTIES:\n:WOLFRAM_OPTIONS: %s\n:END:\n" raw-opts) ""))))
 
-     ;; Lists
-     ((or (assoc style wolfram-nb-list-styles)
-          (assoc style wolfram-nb-numbered-list-styles))
-      (let* ((numbered (assoc style wolfram-nb-numbered-list-styles))
-             (level (cdr (or numbered (assoc style wolfram-nb-list-styles))))
-             (indent (make-string (* (1- level) 2) ?\s))
-             (bullet (if numbered "1. " "- ")))
-        (format "%s%s%s\n"
-                indent
-                bullet
-                (replace-regexp-in-string "\\`[•●◦-][ \t]*\\|\\`[0-9]+\\.\\s-*" "" content))))
+       ;; Lists
+       ((or (assoc style wolfram-nb-list-styles)
+            (assoc style wolfram-nb-numbered-list-styles))
+        (let* ((numbered (assoc style wolfram-nb-numbered-list-styles))
+               (level (cdr (or numbered (assoc style wolfram-nb-list-styles))))
+               (indent (make-string (* (1- level) 2) ?\s))
+               (bullet (if numbered "1. " "- ")))
+          (format "%s%s%s\n"
+                  indent
+                  bullet
+                  (replace-regexp-in-string "\\`[•●◦-][ \t]*\\|\\`[0-9]+\\.\\s-*" "" content))))
 
-     ;; Blockquotes
-     ((string= style "Quote")
-      (format "#+begin_quote\n%s\n#+end_quote\n\n" content))
+       ;; Blockquotes
+       ((string= style "Quote")
+        (format "#+begin_quote\n%s\n#+end_quote\n\n" content))
 
-     ;; Paragraphs
-     ((or (string= style "Text") (string= style "ItemParagraph"))
-      (format "%s\n\n" content))
+       ;; Paragraphs
+       ((or (string= style "Text") (string= style "ItemParagraph"))
+        (format "%s\n\n" content))
 
-     ;; Code Blocks
-     ((or (string= style "Code") (string= style "Input"))
-      (let ((label (cdr (assoc 'cell-label (wolfram-nb-cell-options cell)))))
-        (format "%s%s#+begin_src wolfram\n%s\n#+end_src\n\n"
-                (if label (format "#+NAME: %s\n" label) "")
-                (if raw-opts (format "#+ATTR_WOLFRAM: %s\n" raw-opts) "")
-                content)))
-     
-     ;; Example Blocks
-     ((or (string= style "Output") (string= style "Print"))
-      (let ((label (cdr (assoc 'cell-label (wolfram-nb-cell-options cell)))))
-        (format "%s%s#+begin_example\n%s\n#+end_example\n\n"
-                (if label (format "#+NAME: %s\n" label) "")
-                (if raw-opts (format "#+ATTR_WOLFRAM: %s\n" raw-opts) "")
-                content)))
+       ;; Code Blocks
+       ((or (string= style "Code") (string= style "Input"))
+        (let ((label (cdr (assoc 'cell-label (wolfram-nb-cell-options cell)))))
+          (format "%s%s#+begin_src wolfram\n%s\n#+end_src\n\n"
+                  (if label (format "#+NAME: %s\n" label) "")
+                  (if raw-opts (format "#+ATTR_WOLFRAM: %s\n" raw-opts) "")
+                  content)))
+       
+       ;; Example Blocks
+       ((or (string= style "Output") (string= style "Print"))
+        (let ((label (cdr (assoc 'cell-label (wolfram-nb-cell-options cell)))))
+          (format "%s%s#+begin_example\n%s\n#+end_example\n\n"
+                  (if label (format "#+NAME: %s\n" label) "")
+                  (if raw-opts (format "#+ATTR_WOLFRAM: %s\n" raw-opts) "")
+                  content)))
 
-     ;; Fallback
-     (t
-      (format "#+ATTR_WOLFRAM: :style \"%s\"%s\n#+begin_src wolfram-raw\n%s\n#+end_src\n\n"
-              style
-              (if raw-opts (format " :options \"%s\"" (wolfram-nb--escape-string raw-opts)) "")
-              content)))))
+       ;; Fallback
+       (t
+        (format "#+ATTR_WOLFRAM: :style \"%s\"%s\n#+begin_src wolfram-raw\n%s\n#+end_src\n\n"
+                style
+                (if raw-opts (format " :options \"%s\"" (wolfram-nb--escape-string raw-opts)) "")
+                content))))))
 
 (defun wolfram-nb--cells-to-org (cells)
   "Convert a list of `wolfram-nb-cell' CELLS to Org-mode text."
@@ -784,11 +885,13 @@ it is inserted as-is without extra quotes/escaping."
 
 (defun wolfram-nb--org-to-cells (org-text)
   "Parse ORG-TEXT and convert to a list of Cell string representations."
-  (with-temp-buffer
-    (insert org-text)
-    (org-mode)
-    (let ((tree (org-element-parse-buffer))
-          (cells '()))
+  (let ((cache wolfram-nb--large-cells-cache))
+    (with-temp-buffer
+      (insert org-text)
+      (org-mode)
+      (setq-local wolfram-nb--large-cells-cache cache)
+      (let ((tree (org-element-parse-buffer))
+            (cells '()))
       ;; #+TITLE: -> Title cell
       (org-element-map tree 'keyword
         (lambda (kw)
@@ -868,7 +971,14 @@ it is inserted as-is without extra quotes/escaping."
                     (raw-opts (and raw-opts-list (car raw-opts-list))))
                (cond
                 ((string= lang "wolfram-raw")
-                 (let* ((parsed-attr (wolfram-nb--parse-attr-wolfram raw-opts))
+                 (let* ((id (and raw-opts
+                                 (string-match ":id[ \t\n]*\"\\([^\"]*\\)\"" raw-opts)
+                                 (match-string 1 raw-opts)))
+                        (cached-content (and id
+                                             wolfram-nb--large-cells-cache
+                                             (gethash id wolfram-nb--large-cells-cache)))
+                        (cell-content (or cached-content value))
+                        (parsed-attr (wolfram-nb--parse-attr-wolfram raw-opts))
                         (style (car parsed-attr))
                         (opts (cdr parsed-attr))
                         (final-opts (if name
@@ -876,7 +986,7 @@ it is inserted as-is without extra quotes/escaping."
                                             (format "%s, CellLabel->\"%s\"" opts name)
                                           (format "CellLabel->\"%s\"" name))
                                       opts)))
-                   (push (wolfram-nb--make-cell-string value style final-opts) cells)))
+                   (push (wolfram-nb--make-cell-string cell-content style final-opts) cells)))
                 (t
                  (let ((final-opts (if name
                                        (if raw-opts
@@ -898,9 +1008,9 @@ it is inserted as-is without extra quotes/escaping."
                                         (format "%s, CellLabel->\"%s\"" raw-opts name)
                                       (format "CellLabel->\"%s\"" name))
                                   raw-opts)))
-               (push (wolfram-nb--make-cell-string value "Output" final-opts)
-                     cells))))))
-      (nreverse cells))))
+                (push (wolfram-nb--make-cell-string value "Output" final-opts)
+                      cells))))))
+      (nreverse cells)))))
 
 ;;;; Notebook serialization
 
@@ -1040,17 +1150,23 @@ Returns t for `write-contents-functions'."
 ;;;; Session management
 
 (defun wolfram-nb--parse-endpoint (raw)
-  "Parse RAW endpoint string (\"host:port\") into (HOST . PORT).
-Defaults host to \"localhost\" if only a port is given."
+  "Parse RAW endpoint into (HOST PORT PATH).
+RAW is a string like \"host:port\" or \"host:port/path\".
+Defaults host to \"localhost\" and path to \"/\" when not given."
   (when (and raw (not (string-empty-p (string-trim raw))))
     (let* ((s (string-trim raw))
-           (parts (split-string s ":" t)))
-      (cond
-       ((= (length parts) 1)
-        (cons "localhost" (string-to-number (car parts))))
-       ((>= (length parts) 2)
-        (cons (car parts) (string-to-number (cadr parts))))
-       (t nil)))))
+           (port-part s)
+           (path "/")
+           (host "localhost")
+           (port nil))
+      (when (string-match "\\`\\([^/]+\\)\\(/.*\\)\\'" s)
+        (setq port-part (match-string 1 s)
+              path (match-string 2 s)))
+      (if (string-match "\\`\\([^:]+\\):\\([0-9]+\\)\\'" port-part)
+          (setq host (match-string 1 port-part)
+                port (string-to-number (match-string 2 port-part)))
+        (setq port (string-to-number port-part)))
+      (list host port path))))
 
 (defun wolfram-nb--session-from-org ()
   "Extract session endpoint from #+WOLFRAM_SESSION: keyword in current buffer.
@@ -1082,51 +1198,68 @@ Checks #+WOLFRAM_SESSION: first, then `wolfram-nb-default-session'."
 (defun wolfram-nb--session-active-p ()
   "Return non-nil if a session endpoint is configured and valid."
   (and wolfram-nb--session-endpoint
-       (cdr wolfram-nb--session-endpoint)
-       (> (cdr wolfram-nb--session-endpoint) 0)))
+       (nth 1 wolfram-nb--session-endpoint)
+       (> (nth 1 wolfram-nb--session-endpoint) 0)))
 
 (defun wolfram-nb--session-url ()
   "Build the full URL for the session endpoint."
   (when (wolfram-nb--session-active-p)
     (format "http://%s:%d%s"
-            (car wolfram-nb--session-endpoint)
-            (cdr wolfram-nb--session-endpoint)
-            wolfram-nb-session-path)))
+            (nth 0 wolfram-nb--session-endpoint)
+            (nth 1 wolfram-nb--session-endpoint)
+            (nth 2 wolfram-nb--session-endpoint))))
 
 ;;;; Evaluation — HTTP session
 
 (defun wolfram-nb--eval-via-session (expr)
   "Evaluate EXPR synchronously via HTTP POST to the session server.
 Returns the result string."
-  (let ((url (wolfram-nb--session-url))
-        (url-request-method "POST")
-        (url-request-data (encode-coding-string expr 'utf-8))
-        (url-request-extra-headers '(("Content-Type" . "text/plain")))
-        (result nil)
-        (error-msg nil))
+  (require 'json)
+  (let* ((url (wolfram-nb--session-url))
+         (url-request-method "POST")
+         (post-data (format "expr=%s" (url-hexify-string expr)))
+         (url-request-data (encode-coding-string post-data 'utf-8))
+         (url-request-extra-headers '(("Content-Type" . "application/x-www-form-urlencoded")))
+         (result nil)
+         (error-msg nil)
+         (retrieve-buf nil))
     (unless url
       (signal 'wolfram-nb-eval-error '("No session endpoint configured")))
     (let ((inhibit-message t))
       (condition-case err
-          (with-current-buffer (url-retrieve-synchronously url t t wolfram-nb-session-timeout)
-            (goto-char (point-min))
-            (if (re-search-forward "^HTTP/1\\..+ +\\([0-9]+\\)" nil t)
-                (let ((status (string-to-number (match-string 1))))
-                  (if (= status 200)
-                      (progn
-                        (re-search-forward "^$" nil t)
-                        (forward-char 1)
-                        (setq result (buffer-substring-no-properties (point) (point-max)))
-                        (setq result (string-trim (decode-coding-string
-                                                   (encode-coding-string result 'raw-text)
-                                                   'utf-8))))
-                    (setq error-msg (format "HTTP %d from session" status))))
-              (setq error-msg "No HTTP response from session")))
+          (let ((buf (url-retrieve-synchronously url t t wolfram-nb-session-timeout)))
+            (if (not buf)
+                (setq error-msg "Could not retrieve URL (nil buffer)")
+              (setq retrieve-buf buf)
+              (with-current-buffer buf
+                (goto-char (point-min))
+                (if (re-search-forward "^HTTP/1\\..+ +\\([0-9]+\\)" nil t)
+                    (let ((status (string-to-number (match-string 1))))
+                      (if (= status 200)
+                          (progn
+                            (re-search-forward "^$" nil t)
+                            (forward-char 1)
+                            (let* ((raw-body (buffer-substring-no-properties (point) (point-max)))
+                                   (decoded (string-trim (decode-coding-string
+                                                          (encode-coding-string raw-body 'raw-text)
+                                                          'utf-8))))
+                              (let* ((json-object-type 'alist)
+                                     (json-key-type 'string)
+                                     (parsed (condition-case nil
+                                                 (json-read-from-string decoded)
+                                               (error nil))))
+                                (if parsed
+                                    (let ((success (cdr (assoc "Success" parsed))))
+                                      (if (and success (not (eq success :json-false)))
+                                          (setq result (cdr (assoc "Result" parsed)))
+                                        (setq error-msg (cdr (assoc "Failure" parsed)))))
+                                  (setq result decoded)))))
+                        (setq error-msg (format "HTTP %d from session" status))))
+                  (setq error-msg "No HTTP response from session")))))
         (error (setq error-msg (format "Session error: %s" (error-message-string err))))
         (quit (setq error-msg "Session evaluation timed out")))
-      (when (and (buffer-live-p (current-buffer))
-                 (not (eq (current-buffer) (window-buffer))))
-        (kill-buffer)))
+      (when (buffer-live-p retrieve-buf)
+        (kill-buffer retrieve-buf)))
     (if error-msg
         (signal 'wolfram-nb-eval-error (list error-msg))
       (or result ""))))
@@ -1134,10 +1267,12 @@ Returns the result string."
 (defun wolfram-nb--eval-via-session-async (expr callback)
   "Evaluate EXPR asynchronously via HTTP POST to the session server.
 Calls CALLBACK with the result string on success, or nil on error."
-  (let ((url (wolfram-nb--session-url))
-        (url-request-method "POST")
-        (url-request-data (encode-coding-string expr 'utf-8))
-        (url-request-extra-headers '(("Content-Type" . "text/plain"))))
+  (require 'json)
+  (let* ((url (wolfram-nb--session-url))
+         (url-request-method "POST")
+         (post-data (format "expr=%s" (url-hexify-string expr)))
+         (url-request-data (encode-coding-string post-data 'utf-8))
+         (url-request-extra-headers '(("Content-Type" . "application/x-www-form-urlencoded"))))
     (unless url
       (signal 'wolfram-nb-eval-error '("No session endpoint configured")))
     (url-retrieve url
@@ -1156,10 +1291,21 @@ Calls CALLBACK with the result string on success, or nil on error."
                                   (progn
                                     (re-search-forward "^$" nil t)
                                     (forward-char 1)
-                                    (setq result (buffer-substring-no-properties (point) (point-max)))
-                                    (setq result (string-trim (decode-coding-string
-                                                               (encode-coding-string result 'raw-text)
-                                                               'utf-8))))
+                                    (let* ((raw-body (buffer-substring-no-properties (point) (point-max)))
+                                           (decoded (string-trim (decode-coding-string
+                                                                  (encode-coding-string raw-body 'raw-text)
+                                                                  'utf-8))))
+                                      (let* ((json-object-type 'alist)
+                                             (json-key-type 'string)
+                                             (parsed (condition-case nil
+                                                         (json-read-from-string decoded)
+                                                       (error nil))))
+                                        (if parsed
+                                            (let ((success (cdr (assoc "Success" parsed))))
+                                              (if (and success (not (eq success :json-false)))
+                                                  (setq result (cdr (assoc "Result" parsed)))
+                                                (setq error-msg (cdr (assoc "Failure" parsed)))))
+                                          (setq result decoded)))))
                                 (setq error-msg (format "HTTP %d from session" http-status))))
                           (setq error-msg "No HTTP response from session")))
                       (kill-buffer)
@@ -1192,27 +1338,205 @@ system installation directories."
                  "/usr/local/bin/wolframscript")))))
         (cl-find-if #'file-executable-p fallbacks))))
 
-(defun wolfram-nb--eval-expression (expr)
+(defun wolfram-nb--eval-expression (expr &optional format)
   "Evaluate EXPR synchronously via wolframscript, return result string."
   (unless (wolfram-nb--check-wolframscript)
     (signal 'wolfram-nb-eval-error
             '("wolframscript not found; install Wolfram Engine or set wolfram-nb-wolframscript-path")))
   (with-temp-buffer
-    (let ((exit-code (call-process wolfram-nb-wolframscript-path
-                                  nil t nil "-code" expr))
-          (output nil))
+    (let* ((eval-expr (if format
+                          (format "ExportString[%s, %S]" expr format)
+                        expr))
+           (exit-code (call-process wolfram-nb-wolframscript-path
+                                    nil t nil "-code" eval-expr))
+           (output nil))
       (setq output (buffer-substring-no-properties (point-min) (point-max)))
       (if (= exit-code 0)
           (string-trim output)
         (signal 'wolfram-nb-eval-error
                 (list (format "Exit %d: %s" exit-code (string-trim output))))))))
 
-(defun wolfram-nb--eval-expression-smart (expr)
-  "Evaluate EXPR using session if active, otherwise wolframscript."
+;;;; Evaluation — persistent kernel
+
+(defun wolfram-nb--kernel (&optional start)
+  "Return the live kernel of the current buffer.
+When START is non-nil and none is running, start one if that is possible and
+allowed by `wolfram-nb-use-kernel'."
+  (cond
+   ((wolfram-nb-kernel-live-p wolfram-nb--kernel)
+    wolfram-nb--kernel)
+   ((and start wolfram-nb-use-kernel (wolfram-nb-kernel-available-p))
+    (let ((crashed (and wolfram-nb--kernel t)))
+      (setq wolfram-nb--kernel (wolfram-nb-kernel-start))
+      (add-hook 'kill-buffer-hook #'wolfram-nb-kernel-quit nil t)
+      (when crashed
+        (message "Wolfram kernel was restarted; earlier definitions are gone."))
+      wolfram-nb--kernel))))
+
+(defun wolfram-nb-kernel-quit ()
+  "Shut down the kernel of the current buffer."
+  (interactive)
+  (when wolfram-nb--kernel
+    (wolfram-nb-kernel-stop wolfram-nb--kernel)
+    (setq wolfram-nb--kernel nil)
+    (when (called-interactively-p 'interactive)
+      (message "Wolfram kernel stopped."))))
+
+(defun wolfram-nb-kernel-restart ()
+  "Restart the kernel of the current buffer, forgetting all definitions."
+  (interactive)
+  (wolfram-nb-kernel-quit)
+  (if (wolfram-nb--kernel t)
+      (message "Wolfram kernel starting...")
+    (user-error "No Wolfram kernel available; set `wolfram-nb-kernel-program'")))
+
+(defun wolfram-nb-kernel-info ()
+  "Describe the kernel of the current buffer."
+  (interactive)
+  (let ((kernel wolfram-nb--kernel))
+    (cond
+     ((wolfram-nb-kernel-ready-p kernel)
+      (message "Wolfram kernel ready: %s (%s)"
+               (wolfram-nb-kernel-version kernel)
+               (mapconcat #'identity (wolfram-nb-kernel-command kernel) " ")))
+     ((wolfram-nb-kernel-live-p kernel)
+      (message "Wolfram kernel is starting..."))
+     (wolfram-nb--kernel
+      (message "Wolfram kernel is not running: %s"
+               (or (wolfram-nb-kernel-last-error kernel) "exited")))
+     (t (message "No Wolfram kernel yet; it starts on the first evaluation.")))))
+
+;;;; Evaluation results
+
+(defun wolfram-nb--png-p (string)
+  "Return non-nil if STRING starts with the PNG signature."
+  (and (stringp string)
+       (>= (length string) 4)
+       (= (aref string 0) 137)
+       (= (aref string 1) 80)
+       (= (aref string 2) 78)
+       (= (aref string 3) 71)))
+
+(defun wolfram-nb--normalize-result (raw)
+  "Turn RAW, a string from wolframscript or a session, into a result plist."
+  (if (wolfram-nb--png-p raw)
+      (list :status "ok" :result "" :png raw)
+    (list :status "ok" :result (or raw ""))))
+
+(defun wolfram-nb--result-text (result)
+  "Return the text shown for the result plist RESULT."
+  (string-join
+   (cl-remove-if #'string-empty-p
+                 (mapcar (lambda (key) (string-trim (or (plist-get result key) "")))
+                         '(:stdout :messages :result)))
+   "\n"))
+
+(defun wolfram-nb--kernel-code (code format)
+  "Return the code sent to the kernel for CODE with export FORMAT."
+  (if (and format (not (string= (upcase format) "PNG")))
+      (format "ExportString[(%s), %S]" code format)
+    code))
+
+(defun wolfram-nb--kernel-flags (format)
+  "Return the kernel request flags for export FORMAT."
+  (if (and format (string= (upcase format) "PNG")) "pb" "gb"))
+
+(defun wolfram-nb--check-status (result)
+  "Signal an eval error when RESULT reports a failed evaluation."
+  (let ((status (plist-get result :status)))
+    (when (member status '("timeout" "aborted"))
+      (signal 'wolfram-nb-eval-error
+              (list (format "Evaluation %s after %ss" status
+                            (or (plist-get result :seconds) "?")))))
+    result))
+
+(defun wolfram-nb--eval-detailed (code &optional format)
+  "Evaluate CODE and return a result plist.
+The plist has :status, :result and, when there is any, :stdout, :messages,
+:png and :boxes.  Uses the HTTP session when one is configured, else the
+buffer's kernel, else a fresh wolframscript.  Signals `wolfram-nb-eval-error'."
   (wolfram-nb--refresh-session)
-  (if (wolfram-nb--session-active-p)
-      (wolfram-nb--eval-via-session expr)
-    (wolfram-nb--eval-expression expr)))
+  (cond
+   ((wolfram-nb--session-active-p)
+    (wolfram-nb--normalize-result
+     (wolfram-nb--eval-via-session
+      (if format (format "ExportString[(%s), %S]" code format) code))))
+   ((and wolfram-nb-use-kernel (wolfram-nb--kernel t))
+    (condition-case err
+        (wolfram-nb--check-status
+         (wolfram-nb-kernel-eval-sync
+          (wolfram-nb--kernel t) (wolfram-nb--kernel-code code format)
+          :timeout wolfram-nb-eval-timeout
+          :flags (wolfram-nb--kernel-flags format)))
+      (wolfram-nb-kernel-error
+       (signal 'wolfram-nb-eval-error (cdr err)))))
+   (t
+    (wolfram-nb--normalize-result (wolfram-nb--eval-expression code format)))))
+
+(defun wolfram-nb--eval-one-shot-async (code format callback)
+  "Evaluate CODE with a fresh wolframscript and call CALLBACK (RESULT ERROR)."
+  (unless (wolfram-nb--check-wolframscript)
+    (user-error "wolframscript not found"))
+  (let* ((eval-code (if format (format "ExportString[(%s), %S]" code format) code))
+         (proc
+          (make-process
+           :name "wolfram-eval"
+           :buffer (generate-new-buffer " *wolfram-eval*")
+           :command (list wolfram-nb-wolframscript-path "-code" eval-code)
+           :sentinel
+           (lambda (process _event)
+             (when (memq (process-status process) '(exit signal))
+               (let ((output (with-current-buffer (process-buffer process)
+                               (string-trim (buffer-string))))
+                     (exit-code (process-exit-status process)))
+                 (kill-buffer (process-buffer process))
+                 (if (= exit-code 0)
+                     (funcall callback (wolfram-nb--normalize-result output) nil)
+                   (funcall callback nil output))))))))
+    (setq wolfram-nb--async-process proc)
+    (run-at-time wolfram-nb-eval-timeout nil
+                 (lambda ()
+                   (when (and (processp proc) (process-live-p proc))
+                     (kill-process proc)
+                     (message "Evaluation timed out after %ds"
+                              wolfram-nb-eval-timeout))))))
+
+(defun wolfram-nb--eval-detailed-async (code format callback)
+  "Evaluate CODE in the background and call CALLBACK with (RESULT ERROR).
+RESULT is a plist as returned by `wolfram-nb--eval-detailed'."
+  (wolfram-nb--refresh-session)
+  (cond
+   ((wolfram-nb--session-active-p)
+    (wolfram-nb--eval-via-session-async
+     (if format (format "ExportString[(%s), %S]" code format) code)
+     (lambda (result error-msg)
+       (funcall callback
+                (and (not error-msg) (wolfram-nb--normalize-result result))
+                error-msg))))
+   ((and wolfram-nb-use-kernel (wolfram-nb--kernel t))
+    (condition-case err
+        (wolfram-nb-kernel-eval
+         (wolfram-nb--kernel t) (wolfram-nb--kernel-code code format)
+         (lambda (result)
+           (condition-case eval-err
+               (funcall callback (wolfram-nb--check-status result)
+                        (plist-get result :error))
+             (wolfram-nb-eval-error
+              (funcall callback nil (cadr eval-err)))))
+         :timeout wolfram-nb-eval-timeout
+         :flags (wolfram-nb--kernel-flags format))
+      (wolfram-nb-kernel-error
+       (funcall callback nil (cadr err)))))
+   (t
+    (wolfram-nb--eval-one-shot-async code format callback))))
+
+(defun wolfram-nb--eval-expression-smart (expr &optional format)
+  "Evaluate EXPR with the session, kernel or wolframscript, return a string.
+With FORMAT \"PNG\" the string holds the PNG bytes when the evaluation
+produced an image."
+  (let ((result (wolfram-nb--eval-detailed expr format)))
+    (or (plist-get result :png)
+        (wolfram-nb--result-text result))))
 
 (defun wolfram-nb--format-output (output)
   "Format evaluation OUTPUT for display in Org."
@@ -1220,137 +1544,177 @@ system installation directories."
       (concat output "\n; Graphics output — view in Mathematica")
     output))
 
-(defun wolfram-nb-eval-block ()
-  "Evaluate the Wolfram source block at point and insert output below.
-Uses session if active, otherwise wolframscript."
-  (interactive)
+;;;; Evaluation — writing results into the buffer
+
+(defun wolfram-nb--output-block-end ()
+  "If an evaluation output block starts at point, return the position after it.
+An output block is an example block or a generated Output placeholder."
   (save-excursion
-    (let* ((element (org-element-at-point))
-           (type (org-element-type element)))
-      (unless (eq type 'src-block)
-        (user-error "Not inside a source block"))
-      (let ((lang (org-element-property :language element))
-            (code (org-element-property :value element)))
-        (unless (string= lang "wolfram")
-          (user-error "Not a wolfram source block"))
-        (message "Evaluating...")
-        (condition-case err
-            (let ((result (wolfram-nb--eval-expression-smart code)))
-              (goto-char (org-element-property :end element))
-              (when (looking-at "[ \t]*\n?#\\+begin_example")
-                (let ((output-start (point)))
-                  (when (re-search-forward "^#\\+end_example" nil t)
-                    (forward-line)
-                    (delete-region output-start (point)))))
-              (let ((output-start (point)))
-                (insert "\n#+begin_example\n"
-                        (wolfram-nb--format-output result)
-                        "\n#+end_example\n")
-                (wolfram-nb--render-evaluation-output output-start (point) result))
-              (message "Done."))
-          (wolfram-nb-eval-error
-           (message "Eval error: %s" (cadr err))))))))
+    (cond
+     ((looking-at "[ \t]*#\\+begin_example")
+      (when (re-search-forward "^[ \t]*#\\+end_example[ \t]*\n?" nil t)
+        (point)))
+     ((looking-at "[ \t]*#\\+ATTR_WOLFRAM:.*:style \"Output\".*:id \"")
+      (forward-line 1)
+      (when (looking-at "[ \t]*#\\+begin_src wolfram-raw")
+        (when (re-search-forward "^[ \t]*#\\+end_src[ \t]*\n?" nil t)
+          (point)))))))
 
-(defun wolfram-nb-eval-buffer ()
-  "Evaluate all Wolfram source blocks in the buffer.
-Uses session if active, otherwise wolframscript."
-  (interactive)
+(defun wolfram-nb--delete-following-output ()
+  "Delete the output block that follows point, and the blank lines after it."
+  (let ((start (point)))
+    (skip-chars-forward " \t\n")
+    (goto-char (line-beginning-position))
+    (let ((end (wolfram-nb--output-block-end)))
+      (if end
+          (progn
+            (goto-char end)
+            (skip-chars-forward " \t\n")
+            (delete-region start (point))
+            (goto-char start))
+        (goto-char start)))))
+
+(defun wolfram-nb--prepare-insertion ()
+  "Make point a line start preceded by a blank line, ready for output text."
+  (unless (bolp) (insert "\n"))
+  (unless (or (bobp) (save-excursion (forward-line -1) (looking-at "[ \t]*$")))
+    (insert "\n")))
+
+(defun wolfram-nb--prune-overlays ()
+  "Forget overlays that were deleted with their text."
+  (setq wolfram-nb--overlays
+        (cl-remove-if-not #'overlay-buffer wolfram-nb--overlays)))
+
+(defun wolfram-nb--insert-example (text)
+  "Insert TEXT as an example block at point and return its (START . END)."
+  (wolfram-nb--prepare-insertion)
+  (let ((start (point)))
+    (insert "#+begin_example\n" text "\n#+end_example\n\n")
+    (cons start (point))))
+
+(defun wolfram-nb--insert-graphics-output (boxes png)
+  "Insert a kept-verbatim Output cell for BOXES previewed by PNG.
+Returns the (START . END) region of the inserted block."
+  (let* ((content (format "BoxData[%s]" boxes))
+         (id (wolfram-nb--stash-cell-content content)))
+    (unless wolfram-nb--png-cache
+      (setq wolfram-nb--png-cache (make-hash-table :test 'equal)))
+    (puthash id png wolfram-nb--png-cache)
+    (wolfram-nb--prepare-insertion)
+    (let ((start (point)))
+      (insert (wolfram-nb--placeholder-block
+               id "Output" nil
+               (format "<Graphics output (%s) - kept verbatim and preserved on save.>"
+                       (wolfram-nb--format-size (length content)))))
+      (let ((ov (wolfram-nb--make-fold-overlay start (point) id)))
+        (wolfram-nb--set-overlay-image ov png))
+      (cons start (point)))))
+
+(defun wolfram-nb--apply-eval-result (position result code)
+  "Replace the output after POSITION by the evaluation RESULT of CODE.
+POSITION is where the evaluated source block ends.  Return non-nil."
   (save-excursion
-    (goto-char (point-min))
-    (let ((count 0) (errors 0))
-      (org-element-map (org-element-parse-buffer) 'src-block
-        (lambda (element)
-          (when (string= (org-element-property :language element) "wolfram")
-            (goto-char (org-element-property :begin element))
-            (condition-case _err
-                (progn (wolfram-nb-eval-block)
-                       (setq count (1+ count)))
-              (error (setq errors (1+ errors)))))))
-      (message "Evaluated %d blocks (%d errors)" count errors))))
+    (let ((inhibit-read-only t)
+          (png (plist-get result :png))
+          (boxes (plist-get result :boxes))
+          (text (wolfram-nb--result-text result)))
+      (goto-char position)
+      (wolfram-nb--delete-following-output)
+      (wolfram-nb--prune-overlays)
+      (cond
+       ((and png boxes)
+        (let ((printed (string-join
+                        (cl-remove-if #'string-empty-p
+                                      (mapcar (lambda (key)
+                                                (string-trim (or (plist-get result key) "")))
+                                              '(:stdout :messages)))
+                        "\n")))
+          (unless (string-empty-p printed)
+            (wolfram-nb--insert-example printed)))
+        (wolfram-nb--insert-graphics-output boxes png))
+       (png
+        (let ((region (wolfram-nb--insert-example
+                       (if (image-type-available-p 'png)
+                           "<binary PNG data>"
+                         (format "<PNG image, %d bytes, saved to %s>"
+                                 (length png) (wolfram-nb--save-png png))))))
+          (wolfram-nb--render-evaluation-output
+           (car region) (cdr region) png code)))
+       ((not (string-empty-p text))
+        (let ((region (wolfram-nb--insert-example
+                       (wolfram-nb--format-output text))))
+          (wolfram-nb--render-evaluation-output
+           (car region) (cdr region) text code))))
+      t)))
 
-;;;; Evaluation — asynchronous
+;;;; Evaluation — commands
 
-(defvar-local wolfram-nb--async-process nil
-  "Current async evaluation process, if any.")
-
-(defun wolfram-nb-eval-block-async ()
-  "Evaluate the Wolfram source block at point asynchronously.
-Uses session HTTP if active, otherwise wolframscript."
-  (interactive)
+(defun wolfram-nb--block-at-point ()
+  "Return (CODE FORMAT END) for the wolfram source block at point."
   (let* ((element (org-element-at-point))
          (type (org-element-type element)))
     (unless (eq type 'src-block)
       (user-error "Not inside a source block"))
-    (let ((lang (org-element-property :language element))
-          (code (org-element-property :value element))
-          (end-marker (copy-marker (org-element-property :end element)))
+    (unless (string= (org-element-property :language element) "wolfram")
+      (user-error "Not a wolfram source block"))
+    (let ((params (org-element-property :parameters element)))
+      (list (org-element-property :value element)
+            (when (and params
+                       (string-match ":format[ \t\n]+\\([^ \t\n]+\\)" params))
+              (match-string 1 params))
+            (org-element-property :end element)))))
+
+(defun wolfram-nb-eval-block ()
+  "Evaluate the Wolfram source block at point and insert output below.
+Uses the HTTP session if one is configured, else this buffer's persistent
+kernel, else a fresh wolframscript.  Return non-nil on success."
+  (interactive)
+  (pcase-let ((`(,code ,format ,end) (wolfram-nb--block-at-point)))
+    (message "Evaluating...")
+    (condition-case err
+        (let ((result (wolfram-nb--eval-detailed code format)))
+          (wolfram-nb--apply-eval-result end result code)
+          (message "Done.")
+          t)
+      (wolfram-nb-eval-error
+       (message "Eval error: %s" (cadr err))
+       nil))))
+
+(defun wolfram-nb-eval-buffer ()
+  "Evaluate all Wolfram source blocks of the buffer, top to bottom.
+Definitions carry over from one block to the next."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (let ((count 0) (errors 0))
+      (while (re-search-forward "^[ \t]*#\\+begin_src[ \t]+wolfram\\([ \t\n]\\|$\\)" nil t)
+        (beginning-of-line)
+        (if (wolfram-nb-eval-block)
+            (setq count (1+ count))
+          (setq errors (1+ errors)))
+        (when (re-search-forward "^[ \t]*#\\+end_src" nil t)
+          (forward-line 1)))
+      (message "Evaluated %d blocks (%d errors)" count errors))))
+
+;;;; Evaluation — asynchronous
+
+(defun wolfram-nb-eval-block-async ()
+  "Evaluate the Wolfram source block at point without blocking Emacs."
+  (interactive)
+  (pcase-let ((`(,code ,format ,end) (wolfram-nb--block-at-point)))
+    (let ((end-marker (copy-marker end))
           (buf (current-buffer)))
-      (unless (string= lang "wolfram")
-        (user-error "Not a wolfram source block"))
       (message "Evaluating (async)...")
-      (wolfram-nb--refresh-session)
-      (if (wolfram-nb--session-active-p)
-          (wolfram-nb--eval-via-session-async
-           code
-           (lambda (result error-msg)
-             (when (buffer-live-p buf)
-               (with-current-buffer buf
-                 (save-excursion
-                   (goto-char end-marker)
-                   (when (looking-at "[ \t]*\n?#\\+begin_example")
-                     (let ((output-start (point)))
-                       (when (re-search-forward "^#\\+end_example" nil t)
-                         (forward-line)
-                         (delete-region output-start (point)))))
-                    (if error-msg
-                        (message "Async eval error: %s" error-msg)
-                      (let ((output-start (point)))
-                        (insert "\n#+begin_example\n"
-                                (wolfram-nb--format-output result)
-                                "\n#+end_example\n")
-                        (wolfram-nb--render-evaluation-output output-start (point) result))
-                      (message "Async eval complete."))))
-               (set-marker end-marker nil))))
-        (progn
-          (unless (wolfram-nb--check-wolframscript)
-            (user-error "wolframscript not found"))
-          (let ((proc
-                 (make-process
-                  :name "wolfram-eval"
-                  :buffer (generate-new-buffer " *wolfram-eval*")
-                  :command (list wolfram-nb-wolframscript-path "-code" code)
-                  :sentinel
-                  (lambda (process _event)
-                    (when (memq (process-status process) '(exit signal))
-                      (let ((output (with-current-buffer (process-buffer process)
-                                      (string-trim (buffer-string))))
-                            (exit-code (process-exit-status process)))
-                        (kill-buffer (process-buffer process))
-                        (when (buffer-live-p buf)
-                          (with-current-buffer buf
-                            (save-excursion
-                              (goto-char end-marker)
-                              (when (looking-at "[ \t]*\n?#\\+begin_example")
-                                (let ((output-start (point)))
-                                  (when (re-search-forward "^#\\+end_example" nil t)
-                                    (forward-line)
-                                    (delete-region output-start (point)))))
-                              (if (= exit-code 0)
-                                  (let ((output-start (point)))
-                                    (insert "\n#+begin_example\n"
-                                            (wolfram-nb--format-output output)
-                                            "\n#+end_example\n")
-                                    (wolfram-nb--render-evaluation-output output-start (point) output)
-                                    (message "Async eval complete."))
-                                (message "Async eval error: %s" output))))
-                          (set-marker end-marker nil))))))))
-            (setq wolfram-nb--async-process proc)
-            (run-at-time wolfram-nb-eval-timeout nil
-                         (lambda ()
-                           (when (and (processp proc) (process-live-p proc))
-                             (kill-process proc)
-                             (message "Evaluation timed out after %ds"
-                                      wolfram-nb-eval-timeout))))))))))
+      (wolfram-nb--eval-detailed-async
+       code format
+       (lambda (result error-msg)
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (if error-msg
+                 (message "Async eval error: %s" error-msg)
+               (wolfram-nb--apply-eval-result end-marker result code)
+               (message "Async eval complete."))))
+         (set-marker end-marker nil))))))
 
 ;;;; org-babel integration
 
@@ -1363,16 +1727,23 @@ _PARAMS is the org-babel parameter alist (currently unused)."
   (wolfram-nb--eval-expression-smart body))
 
 (defun wolfram-nb-clear-outputs ()
-  "Remove all example blocks (evaluation outputs) from the buffer."
+  "Remove all evaluation outputs from the buffer.
+That covers example blocks and the Output cells kept verbatim as graphics."
   (interactive)
   (save-excursion
     (goto-char (point-min))
-    (let ((count 0))
-      (while (re-search-forward "^#\\+begin_example\n" nil t)
-        (let ((start (match-beginning 0)))
-          (when (re-search-forward "^#\\+end_example\n?" nil t)
-            (delete-region start (point))
-            (setq count (1+ count)))))
+    (let ((count 0)
+          (inhibit-read-only t))
+      (while (re-search-forward
+              "^[ \t]*\\(#\\+begin_example\\|#\\+ATTR_WOLFRAM:.*:style \"Output\".*:id \"\\)"
+              nil t)
+        (goto-char (match-beginning 0))
+        (let ((end (wolfram-nb--output-block-end)))
+          (if end
+              (progn (delete-region (point) end)
+                     (setq count (1+ count)))
+            (forward-line 1))))
+      (wolfram-nb--prune-overlays)
       (message "Cleared %d output blocks" count))))
 
 ;;;; Imenu integration
@@ -1446,13 +1817,17 @@ Interactively prompts for the value."
   (interactive)
   (wolfram-nb--refresh-session)
   (if (wolfram-nb--session-active-p)
-      (message "Session: %s:%d (active)" (car wolfram-nb--session-endpoint)
-               (cdr wolfram-nb--session-endpoint))
+    (message "Session: %s:%d%s (active)" (nth 0 wolfram-nb--session-endpoint)
+             (nth 1 wolfram-nb--session-endpoint)
+             (nth 2 wolfram-nb--session-endpoint))
     (if wolfram-nb--session-raw
         (message "Session: %s (invalid)" wolfram-nb--session-raw)
-      (if (wolfram-nb--check-wolframscript)
-          (message "No session. Using wolframscript: %s" wolfram-nb-wolframscript-path)
-        (message "No session and no wolframscript available.")))))
+      (cond
+       ((and wolfram-nb-use-kernel (wolfram-nb-kernel-available-p))
+        (wolfram-nb-kernel-info))
+       ((wolfram-nb--check-wolframscript)
+        (message "No session. Using wolframscript: %s" wolfram-nb-wolframscript-path))
+       (t (message "No session and no wolframscript available."))))))
 
 (defun wolfram-nb-session-ping ()
   "Test connectivity to the session endpoint by evaluating \"$Version\"."
@@ -1460,15 +1835,20 @@ Interactively prompts for the value."
   (wolfram-nb--refresh-session)
   (if (not (wolfram-nb--session-active-p))
       (message "No active session to ping.")
-    (message "Pinging %s:%d..." (car wolfram-nb--session-endpoint)
-             (cdr wolfram-nb--session-endpoint))
+    (message "Pinging %s:%d%s..." (nth 0 wolfram-nb--session-endpoint)
+             (nth 1 wolfram-nb--session-endpoint)
+             (nth 2 wolfram-nb--session-endpoint))
     (condition-case err
         (let ((result (wolfram-nb--eval-via-session "$Version")))
           (message "Session alive: %s" result))
       (wolfram-nb-eval-error
        (message "Session ping failed: %s" (cadr err))))))
 
-;;;; Visual Overlays & Inline Previews (Features 1 - 3)
+;;;; Visual Overlays & Inline Previews
+
+(defconst wolfram-nb--fold-label
+  " 🖼️  [Raw Graphics Block - Click to Expand / TAB]\n"
+  "Text shown in place of a folded raw block.")
 
 (defun wolfram-nb-clear-overlays ()
   "Remove all active visual overlays in the current buffer."
@@ -1478,38 +1858,132 @@ Interactively prompts for the value."
       (delete-overlay ov)))
   (setq wolfram-nb--overlays nil))
 
+(defun wolfram-nb--display-code (content)
+  "Return Wolfram code that evaluates to something displayable from CONTENT.
+CONTENT is Wolfram source or the text of a `BoxData[...]' cell."
+  (format "With[{e = ToExpression[ByteArrayToString[BaseDecode[\"%s\"], \"UTF-8\"]]}, If[Head[e] === BoxData, ToExpression[e, StandardForm], e]]"
+          (base64-encode-string (encode-coding-string content 'utf-8) t)))
+
+(defun wolfram-nb--rasterize-one-shot (content callback)
+  "Rasterize CONTENT with a fresh wolframscript; CALLBACK gets (PNG-FILE ERROR)."
+  (if (not (wolfram-nb--check-wolframscript))
+      (funcall callback nil "wolframscript not found")
+    (let* ((temp-content-file (make-temp-file "wolfram-nb-content" nil ".txt"))
+           (temp-png-file (make-temp-file "wolfram-nb-img" nil ".png"))
+           (buf (current-buffer))
+           (code (format "Quiet[Export[%S, Rasterize[ToExpression[Import[%S, \"Text\"]], ImageResolution -> 72], \"PNG\"]]"
+                         temp-png-file temp-content-file)))
+      ;; The content goes through a file to avoid command-line limits.
+      (with-temp-file temp-content-file
+        (insert content))
+      (make-process
+       :name "wolfram-rasterize-async"
+       :buffer (generate-new-buffer " *wolfram-rasterize*")
+       :command (list wolfram-nb-wolframscript-path "-code" code)
+       :sentinel
+       (lambda (process _event)
+         (when (memq (process-status process) '(exit signal))
+           (let ((exit-status (process-exit-status process)))
+             (kill-buffer (process-buffer process))
+             (when (file-exists-p temp-content-file)
+               (delete-file temp-content-file))
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (if (= exit-status 0)
+                     (funcall callback temp-png-file nil)
+                   (when (file-exists-p temp-png-file)
+                     (delete-file temp-png-file))
+                   (funcall callback nil "Rasterization failed")))))))))))
+
+(defun wolfram-nb--render-png-async (content callback)
+  "Rasterize CONTENT in the background and call CALLBACK with (PNG ERROR).
+PNG is a unibyte string.  The buffer's kernel renders it when there is one."
+  (let ((kernel (and wolfram-nb-use-kernel
+                     (not (progn (wolfram-nb--refresh-session)
+                                 (wolfram-nb--session-active-p)))
+                     (wolfram-nb--kernel t)))
+        (buf (current-buffer)))
+    (if kernel
+        (wolfram-nb-kernel-eval
+         kernel (wolfram-nb--display-code content)
+         (lambda (result)
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (if (plist-get result :png)
+                   (funcall callback (plist-get result :png) nil)
+                 (funcall callback nil
+                          (or (plist-get result :error)
+                              "Rasterization failed"))))))
+         :timeout 120 :flags "p")
+      (wolfram-nb--rasterize-one-shot
+       content
+       (lambda (png-file err)
+         (if err
+             (funcall callback nil err)
+           (let ((png (with-temp-buffer
+                        (set-buffer-multibyte nil)
+                        (insert-file-contents-literally png-file)
+                        (buffer-string))))
+             (delete-file png-file)
+             (funcall callback png nil))))))))
+
 (defun wolfram-nb--rasterize-async (content callback)
-  "Asynchronously rasterize Wolfram CONTENT string and execute CALLBACK.
-The CALLBACK is called with (PNG-FILE ERROR-MSG) when completed."
-  (unless (wolfram-nb--check-wolframscript)
-    (funcall callback nil "wolframscript not found"))
-  (let* ((temp-content-file (make-temp-file "wolfram-nb-content" nil ".txt"))
-         (temp-png-file (make-temp-file "wolfram-nb-img" nil ".png"))
-         (buf (current-buffer)))
-    ;; Write content to temporary file to avoid shell command-line length limits or escaping issues
-    (with-temp-file temp-content-file
-      (insert content))
-    (let* ((code (format "Quiet[Export[%S, Rasterize[ToExpression[Import[%S, \"Text\"]], ImageResolution -> 72], \"PNG\"]]"
-                         temp-png-file temp-content-file))
-           (proc (make-process
-                  :name "wolfram-rasterize-async"
-                  :buffer (generate-new-buffer " *wolfram-rasterize*")
-                  :command (list wolfram-nb-wolframscript-path "-code" code)
-                  :sentinel
-                  (lambda (process _event)
-                    (when (memq (process-status process) '(exit signal))
-                      (let ((exit-status (process-exit-status process)))
-                        (kill-buffer (process-buffer process))
-                        (when (file-exists-p temp-content-file)
-                          (delete-file temp-content-file))
-                        (when (buffer-live-p buf)
-                          (with-current-buffer buf
-                            (if (= exit-status 0)
-                                (funcall callback temp-png-file nil)
-                              (when (file-exists-p temp-png-file)
-                                (delete-file temp-png-file))
-                              (funcall callback nil "Rasterization failed"))))))))))
-      proc)))
+  "Rasterize CONTENT in the background and call CALLBACK with (PNG-FILE ERROR)."
+  (wolfram-nb--render-png-async
+   content
+   (lambda (png err)
+     (if (not png)
+         (funcall callback nil err)
+       (let ((file (make-temp-file "wolfram-nb-img" nil ".png")))
+         (let ((coding-system-for-write 'no-conversion))
+           (with-temp-file file
+             (set-buffer-multibyte nil)
+             (insert png)))
+         (funcall callback file nil))))))
+
+(defun wolfram-nb--image-spec (png &optional file)
+  "Return an image display spec for the PNG bytes, or for FILE when given.
+Return nil when this Emacs cannot display PNG images."
+  (when (image-type-available-p 'png)
+    (if file
+        (create-image file 'png nil :max-width 600)
+      (create-image png 'png t :max-width 600))))
+
+(defun wolfram-nb--save-png (png)
+  "Write the PNG bytes to a temporary file and return its name."
+  (let ((file (make-temp-file "wolfram-nb-img" nil ".png"))
+        (coding-system-for-write 'no-conversion))
+    (with-temp-file file
+      (set-buffer-multibyte nil)
+      (insert png))
+    file))
+
+(defun wolfram-nb--make-fold-overlay (start end &optional id)
+  "Create the foldable overlay for a raw block from START to END.
+ID is the placeholder id of a block whose content is kept in the cache."
+  (let ((ov (make-overlay start end))
+        (map (make-sparse-keymap)))
+    (overlay-put ov 'wolfram-nb-fold t)
+    (overlay-put ov 'wolfram-nb-id id)
+    (overlay-put ov 'folded wolfram-nb-fold-raw-blocks)
+    (when wolfram-nb-fold-raw-blocks
+      (overlay-put ov 'display wolfram-nb--fold-label))
+    (overlay-put ov 'evaporate t)
+    (overlay-put ov 'face 'highlight)
+    (define-key map [mouse-1] #'wolfram-nb-toggle-block-at-point)
+    (define-key map (kbd "RET") #'wolfram-nb-toggle-block-at-point)
+    (define-key map (kbd "TAB") #'wolfram-nb-toggle-block-at-point)
+    (overlay-put ov 'keymap map)
+    (push ov wolfram-nb--overlays)
+    ov))
+
+(defun wolfram-nb--set-overlay-image (ov png)
+  "Show the PNG bytes in the folded overlay OV."
+  (let ((spec (wolfram-nb--image-spec png)))
+    (when spec
+      (overlay-put ov 'folded-display spec)
+      (when (overlay-get ov 'folded)
+        (overlay-put ov 'display spec)))))
 
 (defun wolfram-nb-toggle-block-at-point ()
   "Toggle the folded/expanded state of the block overlay at point."
@@ -1531,11 +2005,45 @@ The CALLBACK is called with (PNG-FILE ERROR-MSG) when completed."
             ;; Collapse
             (progn
               (overlay-put ov 'folded t)
-              (overlay-put ov 'display " 🖼️  [Raw Graphics Block - Click to Expand / TAB]\n")
+              (overlay-put ov 'display (or (overlay-get ov 'folded-display)
+                                           wolfram-nb--fold-label))
               (when preview-ov
                 (overlay-put preview-ov 'invisible t)))))))
     (unless found
       (message "No block overlay at point"))))
+
+(defun wolfram-nb--placeholder-id-at (block-start)
+  "Return (ID . ATTR-START) of the placeholder attribute above BLOCK-START."
+  (save-excursion
+    (goto-char block-start)
+    (when (and (zerop (forward-line -1))
+               (looking-at "#\\+ATTR_WOLFRAM:.*:id \"\\([^\"]+\\)\""))
+      (cons (match-string-no-properties 1) (line-beginning-position)))))
+
+(defun wolfram-nb--overlay-cached-block (id start end)
+  "Overlay the placeholder block START..END of cached cell ID with a preview."
+  (let* ((ov (wolfram-nb--make-fold-overlay start end id))
+         (content (and wolfram-nb--large-cells-cache
+                       (gethash id wolfram-nb--large-cells-cache)))
+         (png (and wolfram-nb--png-cache (gethash id wolfram-nb--png-cache)))
+         (buf (current-buffer)))
+    (cond
+     (png (wolfram-nb--set-overlay-image ov png))
+     ((and wolfram-nb-rasterize-graphics content
+           (wolfram-nb--box-cell-p content))
+      (wolfram-nb--render-png-async
+       content
+       (lambda (data err)
+         (cond
+          (err (message "Rasterization warning: %s" err))
+          ((buffer-live-p buf)
+           (with-current-buffer buf
+             (unless wolfram-nb--png-cache
+               (setq wolfram-nb--png-cache (make-hash-table :test 'equal)))
+             (puthash id data wolfram-nb--png-cache)
+             (when (overlay-buffer ov)
+               (wolfram-nb--set-overlay-image ov data)))))))))
+    ov))
 
 (defun wolfram-nb-apply-buffer-overlays ()
   "Scan the buffer for raw/unrecognized blocks and apply overlays."
@@ -1545,67 +2053,78 @@ The CALLBACK is called with (PNG-FILE ERROR-MSG) when completed."
     (goto-char (point-min))
     (while (re-search-forward "^#\\+begin_src wolfram-raw\n" nil t)
       (let* ((block-start (match-beginning 0))
-             (content-start (match-end 0)))
+             (content-start (match-end 0))
+             (placeholder (wolfram-nb--placeholder-id-at block-start)))
         (when (re-search-forward "^#\\+end_src\n?" nil t)
           (let* ((block-end (point))
                  (content-end (match-beginning 0))
-                 (content (buffer-substring-no-properties content-start content-end))
-                 (fold-ov (make-overlay block-start block-end)))
-            (overlay-put fold-ov 'wolfram-nb-fold t)
-            (overlay-put fold-ov 'folded wolfram-nb-fold-raw-blocks)
-            (when wolfram-nb-fold-raw-blocks
-              (overlay-put fold-ov 'display " 🖼️  [Raw Graphics Block - Click to Expand / TAB]\n"))
-            (overlay-put fold-ov 'evaporate t)
-            (overlay-put fold-ov 'face 'highlight)
-            (let ((map (make-sparse-keymap)))
-              (define-key map [mouse-1] #'wolfram-nb-toggle-block-at-point)
-              (define-key map (kbd "RET") #'wolfram-nb-toggle-block-at-point)
-              (define-key map (kbd "TAB") #'wolfram-nb-toggle-block-at-point)
-              (overlay-put fold-ov 'keymap map))
-            (push fold-ov wolfram-nb--overlays)
+                 (content (buffer-substring-no-properties content-start content-end)))
+            (if placeholder
+                (wolfram-nb--overlay-cached-block
+                 (car placeholder) (cdr placeholder) block-end)
+              (let ((fold-ov (wolfram-nb--make-fold-overlay block-start block-end)))
+                ;; If it contains graphical constructs, rasterize it in the background.
+                (when (and wolfram-nb-rasterize-graphics
+                           (string-match-p "BoxData\\|Graphics\\|Raster\\|Image\\|DynamicModule" content))
+                  (let ((preview-ov (make-overlay (1- block-end) block-end)))
+                    (overlay-put preview-ov 'wolfram-nb-preview t)
+                    (when wolfram-nb-fold-raw-blocks
+                      (overlay-put preview-ov 'invisible t))
+                    (overlay-put preview-ov 'evaporate t)
+                    (overlay-put fold-ov 'preview-overlay preview-ov)
+                    (push preview-ov wolfram-nb--overlays)
+                    (wolfram-nb--rasterize-async
+                     content
+                     (lambda (png-path err)
+                       (if err
+                           (message "Rasterization warning: %s" err)
+                         (when (and (file-exists-p png-path)
+                                    (overlay-buffer preview-ov))
+                           (overlay-put preview-ov 'display
+                                        (list (wolfram-nb--image-spec nil png-path)
+                                              "\n")))))))))))))))
+  (length wolfram-nb--overlays))
 
-            ;; If it contains graphical constructs, trigger asynchronous rasterization
-            (when (and wolfram-nb-rasterize-graphics
-                       (string-match-p "BoxData\\|Graphics\\|Raster\\|Image\\|DynamicModule" content))
-              (let ((preview-ov (make-overlay (1- block-end) block-end)))
-                (overlay-put preview-ov 'wolfram-nb-preview t)
-                (when wolfram-nb-fold-raw-blocks
-                  (overlay-put preview-ov 'invisible t))
-                (overlay-put preview-ov 'evaporate t)
-                (overlay-put fold-ov 'preview-overlay preview-ov)
-                (push preview-ov wolfram-nb--overlays)
+(defun wolfram-nb--render-evaluation-output (start end result &optional original-expr)
+  "Render evaluation RESULT inline as an overlay from START to END if graphical.
+RESULT is PNG bytes or the printed result; ORIGINAL-EXPR is the evaluated code."
+  (if (wolfram-nb--png-p result)
+      (let ((result-ov (make-overlay start end))
+            (spec (wolfram-nb--image-spec result)))
+        (overlay-put result-ov 'wolfram-nb-result t)
+        (overlay-put result-ov 'evaporate t)
+        (push result-ov wolfram-nb--overlays)
+        (when spec
+          (overlay-put result-ov 'display spec)
+          (wolfram-nb--make-toggle-keymap result-ov spec)))
+    (let ((is-graphics (string-match-p "\\`\\(Graphics\\|Graphics3D\\|Image\\|Show\\|Plot\\|ContourPlot\\|DensityPlot\\|BarChart\\|PieChart\\)\\s-*\\[" (string-trim result)))
+          (is-label (string-match-p "\\`-\\(Graphics\\|Graphics3D\\|Image\\)-" (string-trim result))))
+      (when (and wolfram-nb-rasterize-graphics
+                 (or is-graphics (and is-label original-expr)))
+        (let ((result-ov (make-overlay start end))
+              (source (if (and is-label original-expr) original-expr result)))
+          (overlay-put result-ov 'wolfram-nb-result t)
+          (overlay-put result-ov 'evaporate t)
+          (push result-ov wolfram-nb--overlays)
+          (wolfram-nb--render-png-async
+           source
+           (lambda (png err)
+             (if err
+                 (message "Evaluation rasterization warning: %s" err)
+               (let ((spec (and (overlay-buffer result-ov)
+                                (wolfram-nb--image-spec png))))
+                 (when spec
+                   (overlay-put result-ov 'display spec)
+                   (wolfram-nb--make-toggle-keymap result-ov spec)))))))))))
 
-                (wolfram-nb--rasterize-async
-                 content
-                 (lambda (png-path err)
-                   (if err
-                       (message "Rasterization warning: %s" err)
-                     (when (file-exists-p png-path)
-                       (let* ((img (create-image png-path 'png nil :max-width 600))
-                              (display-spec (append (list 'margin nil) (list img) '("\n"))))
-                         (overlay-put preview-ov 'display display-spec))))))))))))))
-
-(defun wolfram-nb--render-evaluation-output (start end result)
-  "Render evaluation RESULT inline as an overlay from START to END if graphical."
-  (when (and wolfram-nb-rasterize-graphics
-             (string-match-p "\\`\\(Graphics\\|Graphics3D\\|Image\\|Show\\|Plot\\|ContourPlot\\|DensityPlot\\|BarChart\\|PieChart\\)\\s-*\\[" (string-trim result)))
-    (let ((result-ov (make-overlay start end)))
-      (overlay-put result-ov 'wolfram-nb-result t)
-      (overlay-put result-ov 'evaporate t)
-      (push result-ov wolfram-nb--overlays)
-      (wolfram-nb--rasterize-async
-       result
-       (lambda (png-path err)
-         (if err
-             (message "Evaluation rasterization warning: %s" err)
-           (when (file-exists-p png-path)
-             (let* ((img (create-image png-path 'png nil :max-width 600))
-                    (display-spec (append (list 'margin nil) (list img) '("\n"))))
-               (overlay-put result-ov 'display display-spec)
-               ;; Click to toggle raw text output
-               (let ((map (make-sparse-keymap)))
-                 (define-key map [mouse-1] (lambda () (interactive) (overlay-put result-ov 'display (if (overlay-get result-ov 'display) nil display-spec))))
-                 (overlay-put result-ov 'keymap map))))))))))
+(defun wolfram-nb--make-toggle-keymap (ov spec)
+  "Let a click on overlay OV switch between the image SPEC and the raw text."
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1]
+      (lambda ()
+        (interactive)
+        (overlay-put ov 'display (if (overlay-get ov 'display) nil spec))))
+    (overlay-put ov 'keymap map)))
 
 (defun wolfram-nb-toggle-overlays ()
   "Toggle the visual overlays on/off in the current buffer."
@@ -1631,6 +2150,8 @@ The CALLBACK is called with (PNG-FILE ERROR-MSG) when completed."
     (define-key map (kbd "C-c C-s") #'wolfram-nb-set-session)
     (define-key map (kbd "C-c C-p") #'wolfram-nb-session-ping)
     (define-key map (kbd "C-c C-o") #'wolfram-nb-toggle-overlays)
+    (define-key map (kbd "C-c C-z") #'wolfram-nb-kernel-restart)
+    (define-key map (kbd "C-c C-q") #'wolfram-nb-kernel-quit)
     (define-key map (kbd "C-x C-s") #'wolfram-nb-save)
     map)
   "Keymap for `wolfram-nb-mode'.")

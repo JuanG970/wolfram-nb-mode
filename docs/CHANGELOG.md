@@ -4,6 +4,27 @@ All notable changes to wolfram-nb-mode will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Persistent kernel per notebook buffer (see `docs/KERNEL.md`): definitions and
+  `%` carry across cells; remote kernels via `wolfram-nb-kernel-command`
+- Graphics results come back as a PNG preview plus StandardForm boxes and are
+  saved as real `Cell[BoxData[GraphicsBox[...]], "Output"]` cells
+- Commands `wolfram-nb-kernel-restart` (`C-c C-z`), `wolfram-nb-kernel-quit`
+  (`C-c C-q`), `wolfram-nb-kernel-info`
+- Tests: `test-kernel.el` (protocol, with a fake kernel), `test-output.el`,
+  `test-e2e.el`
+
+### Fixed
+- Graphics cells (`GraphicsBox`, `FormBox`, ...) were written back as quoted
+  strings; they are now kept verbatim
+- A cell style could be read from a string inside the box data (a plot's
+  `"DefaultMeshStyle"` option became the style); the style is now the second
+  top-level argument of `Cell[...]`
+- Cell options on BoxData and TextData cells (`ExpressionUUID`, ...) were
+  lost because the match data was read after other calls overwrote it
+- `wolfram-nb-eval-buffer` used stale positions after the first output was
+  inserted
+
 ### Changed
 - Reorganized repository structure following Emacs package best practices
   - Tests moved to `tests/` directory

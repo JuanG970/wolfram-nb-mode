@@ -72,14 +72,30 @@ for nb in "$ROOT_DIR"/examples/*.nb; do
 done
 
 echo ""
-echo "6. Byte-compilation"
+echo "6. Session Tests"
+run_test_file "Session tests" "test-session.el"
+
+echo ""
+echo "7. Kernel Tests"
+run_test_file "Kernel tests" "test-kernel.el"
+
+echo ""
+echo "8. Output & Graphics Tests"
+run_test_file "Output tests" "test-output.el"
+
+echo ""
+echo "9. End-to-End Notebook Tests"
+run_test_file "End-to-end tests" "test-e2e.el"
+
+echo ""
+echo "10. Byte-compilation"
 set +e
 BC_RESULT=$(emacs --batch -Q -L "$ROOT_DIR" \
     --eval "(setq byte-compile-error-on-warn t)" \
-    -f batch-byte-compile "$ROOT_DIR/wolfram-nb-mode.el" 2>&1)
+    -f batch-byte-compile "$ROOT_DIR/wolfram-nb-kernel.el" "$ROOT_DIR/wolfram-nb-mode.el" 2>&1)
 BC_EXIT=$?
 set -e
-rm -f "$ROOT_DIR/wolfram-nb-mode.elc"
+rm -f "$ROOT_DIR/wolfram-nb-mode.elc" "$ROOT_DIR/wolfram-nb-kernel.elc"
 if [ "$BC_EXIT" -eq 0 ]; then
     echo "   ✓ Byte-compiles cleanly (no warnings)"
 else
