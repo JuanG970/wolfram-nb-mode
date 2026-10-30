@@ -93,7 +93,9 @@ up afterwards; a kernel of the buffer's own is stopped with it."
              (let ((wolfram-nb-eval-timeout 120))
                (wolfram-nb-e2e--attach-kernel wolfram-nb-e2e--own-kernel)
                ,@body)))
-       (when (buffer-live-p buf) (kill-buffer buf))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf (set-buffer-modified-p nil))
+         (kill-buffer buf))
        (when (file-exists-p ,file) (delete-file ,file)))))
 
 (defun wolfram-nb-e2e--kernel-eval (code)
@@ -157,7 +159,7 @@ up afterwards; a kernel of the buffer's own is stopped with it."
     ;; Reopen the saved notebook: graphics come back as placeholders, and a
     ;; second save leaves the cells untouched.
     (let ((first-save (with-temp-buffer (insert-file-contents file) (buffer-string)))
-          (reopened (wolfram-nb-open file)))
+          (reopened (progn (revert-buffer t t) (current-buffer))))
       (ignore reopened)
       (let ((second (current-buffer)))
         (unwind-protect
@@ -248,7 +250,7 @@ up afterwards; a kernel of the buffer's own is stopped with it."
                       (format "StringSplit[Cases[Get[%s], Cell[s_String, \"Output\", ___] :> s, Infinity][[1]], \"\\n\"]" lit))
                      "{* looks like a headline, #+end_example, ,* comma, - not a list, [[x]] and *b*, last line}")))
     ;; And it opens again as the same cells.
-    (let ((again (wolfram-nb-open file)))
+    (let ((again (progn (revert-buffer t t) (current-buffer))))
       (ignore again)
       (let ((reopened (current-buffer)))
         (unwind-protect

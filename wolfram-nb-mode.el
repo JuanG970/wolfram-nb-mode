@@ -42,8 +42,10 @@
 ;; - Notebook metadata preservation across roundtrips
 ;;
 ;; Quick start:
-;;   M-x wolfram-nb-open RET notebook.nb RET
-;;   Edit as Org-mode, save with C-x C-s
+;;   Open a .nb file with `find-file', from Dired, or with
+;;   M-x wolfram-nb-open RET notebook.nb RET.  The buffer shows the notebook as
+;;   Org text and visits the file, so it is saved the usual way: C-x C-s,
+;;   `save-buffer', or Evil's :w.  `revert-buffer' reads the file again.
 ;;
 ;; Cell type mapping:
 ;;   Title           -> #+TITLE:
@@ -468,6 +470,14 @@ Returns a list of strings."
   "Hash table from the number in a [wnb:N] token to the box it stands for.
 Inline boxes that Org cannot show, such as hyperlinks and inline cells, are
 replaced by a token in the text and put back when the notebook is saved.")
+
+;; Re-running the mode (`normal-mode', `M-x wolfram-nb-mode') must not lose what
+;; ties the Org text to its notebook.  Without these tables the boxes kept
+;; verbatim and the inline tokens could not be written back.
+(dolist (var '(wolfram-nb--cells wolfram-nb--original-file wolfram-nb--notebook-options
+               wolfram-nb--cell-count wolfram-nb--large-cells-cache wolfram-nb--box-sources
+               wolfram-nb--opaque-parts wolfram-nb--kernel))
+  (put var 'permanent-local t))
 
 (defun wolfram-nb--opaque-token (part)
   "Return the text standing for the inline box PART, remembering PART."
@@ -1127,6 +1137,9 @@ When called from a `wolfram-nb-mode' buffer, also sets
       (let* ((nb-open (match-beginning 0))
              (list-end (wolfram-nb--sexp-end (1- (match-end 0))))
              (nb-end (wolfram-nb--sexp-end (+ nb-open (length "Notebook")))))
+        (unless list-end
+          (signal 'wolfram-nb-parse-error
+                  (list "The cell list of the notebook is not closed" file)))
         (let ((cells '()))
           (while (re-search-forward "Cell\\[" (or list-end (point-max)) t)
             (goto-char (match-beginning 0))
@@ -2025,29 +2038,58 @@ SESSION is the raw endpoint string, or nil to remove."
 
 ;;;###autoload
 (defun wolfram-nb-open (file)
-  "Open Wolfram Notebook FILE and display as Org-mode."
+  "Visit Wolfram Notebook FILE as Org text.
+This is `find-file' for a notebook: Dired and `find-file' on a .nb file do the
+same, and the buffer then saves back to the .nb with `save-buffer', `C-x C-s'
+or Evil's `:w'."
   (interactive "fOpen Wolfram Notebook: ")
-  (let ((buf (generate-new-buffer
-              (format "*wolfram-nb: %s*" (file-name-nondirectory file)))))
+  (let ((buf (find-file-noselect file)))
     (with-current-buffer buf
-      (wolfram-nb-mode)
-      (let* ((cells (wolfram-nb--parse-notebook file))
-             (inhibit-read-only t))
-        (erase-buffer)
-        (insert (wolfram-nb--cells-to-org cells))
-        (goto-char (point-min))
-        (set-buffer-modified-p nil)
-        (setq wolfram-nb--cells cells
-              wolfram-nb--original-file (expand-file-name file)
-              wolfram-nb--cell-count (length cells))
-        (wolfram-nb--refresh-session)))
+      (unless (derived-mode-p 'wolfram-nb-mode)
+        (wolfram-nb-mode)))
     (switch-to-buffer buf)
-    (with-current-buffer buf
-      (message "Opened %s (%d cells)%s"
-               (file-name-nondirectory file) wolfram-nb--cell-count
-               (if wolfram-nb--session-raw
-                   (format " [session: %s]" wolfram-nb--session-raw)
-                 "")))))
+    buf))
+
+(defun wolfram-nb--raw-notebook-p ()
+  "Return non-nil when the buffer holds the text of a .nb file, not Org."
+  (save-excursion
+    (goto-char (point-min))
+    (while (and (looking-at "[ \t\n]*(\\*") (search-forward "*)" nil t)))
+    (looking-at "[ \t\n]*Notebook\\[")))
+
+(defun wolfram-nb--load-notebook (file)
+  "Replace the contents of the current buffer with the Org view of FILE."
+  (let ((pos (point))
+        (inhibit-read-only t)
+        cells)
+    (setq wolfram-nb--large-cells-cache nil
+          wolfram-nb--box-sources nil
+          wolfram-nb--opaque-parts nil
+          wolfram-nb--notebook-options nil)
+    (setq cells (wolfram-nb--parse-notebook file))
+    (erase-buffer)
+    (insert (wolfram-nb--cells-to-org cells))
+    (goto-char (min pos (point-max)))
+    (set-buffer-modified-p nil)
+    (setq buffer-undo-list nil)
+    (when buffer-file-name
+      (set-visited-file-modtime))
+    (setq wolfram-nb--cells cells
+          wolfram-nb--original-file (expand-file-name file)
+          wolfram-nb--cell-count (length cells))
+    (wolfram-nb--refresh-session)
+    (wolfram-nb-apply-buffer-overlays)
+    (message "Opened %s (%d cells)%s"
+             (file-name-nondirectory file) wolfram-nb--cell-count
+             (if wolfram-nb--session-raw
+                 (format " [session: %s]" wolfram-nb--session-raw)
+               ""))))
+
+(defun wolfram-nb--revert-buffer (_ignore-auto _noconfirm)
+  "Read the notebook file again; used as `revert-buffer-function'."
+  (unless buffer-file-name
+    (user-error "This buffer is not visiting a notebook file"))
+  (wolfram-nb--load-notebook buffer-file-name))
 
 (defun wolfram-nb--write-file-atomically (file text)
   "Write TEXT to FILE so that a failure leaves the old file alone.
@@ -2067,21 +2109,29 @@ The text goes to a file beside FILE first, which then replaces it."
 
 (defun wolfram-nb-save ()
   "Save the current Org buffer back to .nb format.
-Returns t for `write-contents-functions'."
+Returns t for `write-contents-functions', so `save-buffer' (and with it
+`C-x C-s' and Evil's `:w') ends up here."
   (interactive)
-  (unless wolfram-nb--original-file
-    (signal 'wolfram-nb-error '("No associated .nb file")))
-  (wolfram-nb--refresh-session)
-  (let* ((org-text (buffer-substring-no-properties (point-min) (point-max)))
-         (cells (wolfram-nb--org-to-cells org-text))
-         (notebook-text (wolfram-nb--cells-to-notebook cells)))
-    (wolfram-nb--write-file-atomically wolfram-nb--original-file notebook-text)
-    (setq wolfram-nb--cells nil
-          wolfram-nb--cell-count (length cells))
-    (set-buffer-modified-p nil)
-    (force-mode-line-update)
-    (message "Saved to %s (%d cells)" wolfram-nb--original-file (length cells))
-    t))
+  (let ((file (or buffer-file-name wolfram-nb--original-file)))
+    (unless file
+      (signal 'wolfram-nb-error '("No associated .nb file")))
+    (when (and (not wolfram-nb--original-file) (wolfram-nb--raw-notebook-p))
+      (signal 'wolfram-nb-error
+              '("This buffer still holds the raw notebook text; not saving it as Org")))
+    (wolfram-nb--refresh-session)
+    (let* ((org-text (buffer-substring-no-properties (point-min) (point-max)))
+           (cells (wolfram-nb--org-to-cells org-text))
+           (notebook-text (wolfram-nb--cells-to-notebook cells)))
+      (wolfram-nb--write-file-atomically file notebook-text)
+      (setq wolfram-nb--cells nil
+            wolfram-nb--original-file (expand-file-name file)
+            wolfram-nb--cell-count (length cells))
+      (set-buffer-modified-p nil)
+      (when buffer-file-name
+        (set-visited-file-modtime))
+      (force-mode-line-update)
+      (message "Saved to %s (%d cells)" file (length cells))
+      t)))
 
 (defun wolfram-nb-reparse ()
   "Reparse the current buffer and update internal cell state."
@@ -2114,12 +2164,15 @@ Returns t for `write-contents-functions'."
 
 ;;;###autoload
 (defun wolfram-nb-create-new (file)
-  "Create a new Wolfram Notebook at FILE."
+  "Create a new Wolfram Notebook at FILE.
+The buffer visits FILE, so it is saved like any other file."
   (interactive "FCreate Wolfram Notebook: ")
-  (let ((buf (generate-new-buffer
-              (format "*wolfram-nb: %s*" (file-name-nondirectory file)))))
+  (when (file-exists-p file)
+    (user-error "%s exists; open it with `wolfram-nb-open'" file))
+  (let ((buf (find-file-noselect file)))
     (with-current-buffer buf
-      (wolfram-nb-mode)
+      (unless (derived-mode-p 'wolfram-nb-mode)
+        (wolfram-nb-mode))
       (setq wolfram-nb--original-file (expand-file-name file)
             wolfram-nb--cell-count 0)
       (insert "#+TITLE: New Notebook\n\n")
@@ -3176,7 +3229,6 @@ RESULT is PNG bytes or the printed result; ORIGINAL-EXPR is the evaluated code."
     (define-key map (kbd "C-c C-o") #'wolfram-nb-toggle-overlays)
     (define-key map (kbd "C-c C-z") #'wolfram-nb-kernel-restart)
     (define-key map (kbd "C-c C-q") #'wolfram-nb-kernel-quit)
-    (define-key map (kbd "C-x C-s") #'wolfram-nb-save)
     map)
   "Keymap for `wolfram-nb-mode'.")
 
@@ -3191,6 +3243,7 @@ Cell[...] structure for serialization back to Notebook format.
 
 \\{wolfram-nb-mode-map}"
   (setq-local write-contents-functions '(wolfram-nb-save))
+  (setq-local revert-buffer-function #'wolfram-nb--revert-buffer)
   (setq-local imenu-create-index-function #'wolfram-nb--imenu-create-index)
   (font-lock-add-keywords nil wolfram-nb-font-lock-keywords 'append)
   (message "Wolfram-NB mode. C-c C-c eval | C-x C-s save | C-c C-n new block | C-c C-s session"))
@@ -3201,27 +3254,21 @@ Cell[...] structure for serialization back to Notebook format.
 (add-to-list 'auto-mode-alist '("\\.nb\\'" . wolfram-nb-mode))
 
 (defun wolfram-nb--auto-open ()
-  "Automatically parse .nb files when opened in wolfram-nb-mode."
+  "Show a notebook file that was visited with `find-file' as Org text.
+A file that cannot be parsed stays as it is, read-only, so that it is never
+saved back as something else."
   (when (and wolfram-nb-auto-open
-             wolfram-nb--original-file
+             buffer-file-name
+             (not wolfram-nb--original-file)
              (not (buffer-modified-p))
-             (= (point-min) (point-max)))
-    (let* ((file wolfram-nb--original-file)
-           (cells (wolfram-nb--parse-notebook file))
-           (inhibit-read-only t))
-      (erase-buffer)
-      (insert (wolfram-nb--cells-to-org cells))
-      (goto-char (point-min))
-      (set-buffer-modified-p nil)
-      (setq wolfram-nb--cells cells
-            wolfram-nb--cell-count (length cells))
-      (wolfram-nb--refresh-session)
-      (wolfram-nb-apply-buffer-overlays)
-      (message "Opened %s (%d cells)%s"
-               (file-name-nondirectory file) wolfram-nb--cell-count
-               (if wolfram-nb--session-raw
-                   (format " [session: %s]" wolfram-nb--session-raw)
-                 "")))))
+             (wolfram-nb--raw-notebook-p))
+    (condition-case err
+        (wolfram-nb--load-notebook buffer-file-name)
+      (error
+       (setq buffer-read-only t)
+       (message "wolfram-nb: cannot read %s as a notebook: %s"
+                (file-name-nondirectory buffer-file-name)
+                (error-message-string err))))))
 
 (add-hook 'wolfram-nb-mode-hook #'wolfram-nb--auto-open)
 

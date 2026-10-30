@@ -352,7 +352,9 @@ The text is nil for a block without output, and `graphics' for a graphic."
                      (wolfram-nb-eval-buffer)
                      ,@body))
                ;; The kernel is shared; the buffer must not stop it.
-               (with-current-buffer buf (setq wolfram-nb--kernel nil))
+               (with-current-buffer buf
+                 (setq wolfram-nb--kernel nil)
+                 (set-buffer-modified-p nil))
                (kill-buffer buf))))
        (delete-file file))))
 
@@ -380,8 +382,8 @@ The text is nil for a block without output, and `graphics' for a graphic."
     (let ((saved (make-temp-file "wolfram-nb-saved" nil ".nb")))
       (unwind-protect
           (progn
-            (setq wolfram-nb--original-file saved)
-            (wolfram-nb-save)
+            (delete-file saved)
+            (write-file saved)
             (let ((kernel (wolfram-nb-corpus--kernel)))
               ;; Four graphics were drawn; each is a real graphic in the file.
               (should (equal (plist-get

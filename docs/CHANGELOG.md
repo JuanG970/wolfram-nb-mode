@@ -116,6 +116,25 @@ mode and having the kernel compare the original with the saved file:
   "function" as built-ins, while the code blocks themselves were repainted by
   Org and showed no highlighting. It now applies only inside `wolfram` source
   blocks, after Org's own fontification, and matches case-sensitively
+- Opening and saving now work like any file (found by going through Dired and
+  Evil's `:w` in a headless Emacs on the remote box):
+  - a `.nb` opened with `find-file` or from Dired showed the raw
+    `Notebook[{...` text, because only `wolfram-nb-open` converted it. The
+    conversion now happens when the file is visited
+  - saving failed with "No associated .nb file" in that buffer, and with
+    "Please specify a file name" under Evil's `:w` in a `wolfram-nb-open`
+    buffer, which had no file. Notebook buffers now visit their file, so
+    `save-buffer`, `C-x C-s` (no longer bound by the mode), `:w`, `write-file`
+    and `revert-buffer` all work, and Emacs does not report the file as changed
+    behind its back after a save
+  - `wolfram-nb-open` is now `find-file` for a notebook and reuses the buffer
+    if the file is already open; `wolfram-nb-create-new` makes a buffer that
+    visits the new file
+  - the tables that let unedited cells be written back exactly, and the kernel
+    of the buffer, survive `normal-mode` and `M-x wolfram-nb-mode`
+  - a notebook whose cell list is not closed was shown as an empty buffer that
+    a save would then write over the file; it is now an error, the buffer
+    stays read-only with the file's text, and saving it is refused
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline
