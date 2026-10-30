@@ -1761,11 +1761,29 @@ For plain strings, whose asterisks and slashes are not formatting."
                 (if raw-opts (format " :options \"%s\"" (wolfram-nb--escape-string raw-opts)) "")
                 (org-escape-code-in-string content))))))))
 
+(defconst wolfram-nb--result-styles
+  '("Output" "Print" "Message" "Echo" "EchoTiming" "EchoLabel" "PrintTemporary"
+    "Information")
+  "Cell styles that hold what an evaluation produced.")
+
 (defun wolfram-nb--cells-to-org (cells)
-  "Convert a list of `wolfram-nb-cell' CELLS to Org-mode text."
+  "Convert a list of `wolfram-nb-cell' CELLS to Org-mode text.
+The cells an Input cell produced are put under a #+RESULTS: line, as
+org-babel does, so that evaluating the block again replaces them."
   (let ((body (let ((wolfram-nb--box-counts (make-hash-table :test 'equal))
-                    (wolfram-nb--previous-list-level nil))
-                (mapconcat #'wolfram-nb--cell-to-org cells "")))
+                    (wolfram-nb--previous-list-level nil)
+                    (previous nil))
+                (mapconcat
+                 (lambda (cell)
+                   (let ((style (wolfram-nb-cell-style cell))
+                         (text (wolfram-nb--cell-to-org cell)))
+                     (prog1
+                         (if (and (member style wolfram-nb--result-styles)
+                                  (member previous '("Input" "Code")))
+                             (concat "#+RESULTS:\n" text)
+                           text)
+                       (setq previous style))))
+                 cells "")))
         (session wolfram-nb--session-raw))
     (if (and session (not (string-empty-p session)))
         (concat (format "#+WOLFRAM_SESSION: %s\n\n" session) body)
@@ -2593,33 +2611,56 @@ produced an image."
 
 ;;;; Evaluation — writing results into the buffer
 
-(defun wolfram-nb--output-block-end ()
-  "If an evaluation output block starts at point, return the position after it.
-An output block is an example block or a generated Output placeholder."
-  (save-excursion
-    (cond
-     ((looking-at "[ \t]*#\\+begin_example")
-      (when (re-search-forward "^[ \t]*#\\+end_example[ \t]*\n?" nil t)
-        (point)))
-     ((looking-at "[ \t]*#\\+ATTR_WOLFRAM:.*:style \"Output\".*:id \"")
-      (forward-line 1)
-      (when (looking-at "[ \t]*#\\+begin_src wolfram-raw")
-        (when (re-search-forward "^[ \t]*#\\+end_src[ \t]*\n?" nil t)
-          (point)))))))
+(defconst wolfram-nb--affiliated-regexp
+  (concat "^[ \t]*#\\+\\(?:RESULTS\\|NAME\\|ATTR_[A-Z_]+\\|CAPTION\\|HEADERS?\\)"
+          "\\(?:\\[[^]\n]*\\]\\)?:.*\n")
+  "A keyword line that belongs to the block after it.")
 
-(defun wolfram-nb--delete-following-output ()
-  "Delete the output block that follows point, and the blank lines after it."
-  (let ((start (point)))
-    (skip-chars-forward " \t\n")
-    (goto-char (line-beginning-position))
-    (let ((end (wolfram-nb--output-block-end)))
-      (if end
-          (progn
-            (goto-char end)
-            (skip-chars-forward " \t\n")
-            (delete-region start (point))
-            (goto-char start))
-        (goto-char start)))))
+(defun wolfram-nb--result-item-end ()
+  "If a result starts at the line at point, return the position after it.
+A result is an example block, or a raw placeholder of an Output-like cell,
+with the #+RESULTS:, #+NAME: and #+ATTR_WOLFRAM: lines before it and the blank
+lines after it.  Return nil when the line starts something else."
+  (save-excursion
+    (let ((case-fold-search t)
+          (style nil))
+      (while (looking-at wolfram-nb--affiliated-regexp)
+        (when (looking-at "[ \t]*#\\+ATTR_WOLFRAM:.*?:style \"\\([^\"]*\\)\"")
+          (setq style (match-string 1)))
+        (forward-line 1))
+      (let ((end (cond
+                  ((looking-at "[ \t]*#\\+begin_example\\(?:[ \t]\\|$\\)")
+                   (and (re-search-forward "^[ \t]*#\\+end_example[ \t]*$" nil t)
+                        (point)))
+                  ((and (looking-at "[ \t]*#\\+begin_src[ \t]+wolfram-raw\\(?:[ \t]\\|$\\)")
+                        (member style wolfram-nb--result-styles))
+                   (and (re-search-forward "^[ \t]*#\\+end_src[ \t]*$" nil t)
+                        (point))))))
+        (when end
+          (goto-char end)
+          (forward-line 1)
+          (skip-chars-forward " \t\n")
+          (when (and (not (bobp)) (not (bolp)))
+            (beginning-of-line))
+          (point))))))
+
+(defun wolfram-nb--delete-results (position)
+  "Delete the results that follow POSITION, the end of a source block.
+Everything the block produced before goes: its #+RESULTS: block, an Output
+cell that came with the notebook, and further Print or Message cells."
+  (save-excursion
+    (goto-char position)
+    (let ((end nil))
+      (while (let ((next (wolfram-nb--result-item-end)))
+               (when next
+                 (setq end next)
+                 (goto-char next)
+                 t)))
+      (when end
+        (dolist (ov (overlays-in position end))
+          (when (overlay-get ov 'wolfram-nb-fold)
+            (delete-overlay ov)))
+        (delete-region position end)))))
 
 (defun wolfram-nb--prepare-insertion ()
   "Make point a line start preceded by a blank line, ready for output text."
@@ -2660,24 +2701,28 @@ Emacs slows down on very long lines; the rest of such a line is left out."
               (substring text 0 wolfram-nb-max-output-length)
               wolfram-nb-max-output-length (length text)))))
 
-(defun wolfram-nb--insert-example (text)
-  "Insert TEXT as an example block at point and return its (START . END)."
+(defun wolfram-nb--insert-example (text &optional label)
+  "Insert TEXT as an example block at point and return its (START . END).
+With LABEL the block starts a result: a #+RESULTS: line goes before it."
   (setq text (wolfram-nb--limit-output text))
   (wolfram-nb--prepare-insertion)
+  (when label (insert "#+RESULTS:\n"))
   (let ((start (point)))
     (insert "#+begin_example\n" (org-escape-code-in-string text)
             "\n#+end_example\n\n")
     (cons start (point))))
 
-(defun wolfram-nb--insert-graphics-output (boxes png)
+(defun wolfram-nb--insert-graphics-output (boxes png &optional label)
   "Insert a kept-verbatim Output cell for BOXES previewed by PNG.
-Returns the (START . END) region of the inserted block."
+With LABEL a #+RESULTS: line goes before it.  Returns the (START . END) region
+of the inserted block."
   (let* ((content (format "BoxData[%s]" boxes))
          (id (wolfram-nb--stash-cell-content content)))
     (unless wolfram-nb--png-cache
       (setq wolfram-nb--png-cache (make-hash-table :test 'equal)))
     (puthash id png wolfram-nb--png-cache)
     (wolfram-nb--prepare-insertion)
+    (when label (insert "#+RESULTS:\n"))
     (let ((start (point)))
       (insert (wolfram-nb--placeholder-block
                id "Output" nil
@@ -2688,40 +2733,45 @@ Returns the (START . END) region of the inserted block."
       (cons start (point)))))
 
 (defun wolfram-nb--apply-eval-result (position result code)
-  "Replace the output after POSITION by the evaluation RESULT of CODE.
-POSITION is where the evaluated source block ends.  Return non-nil."
+  "Replace the results after POSITION by the evaluation RESULT of CODE.
+POSITION is where the evaluated source block ends.  Like org-babel, the
+new result goes under a #+RESULTS: line and takes the place of the old one.
+Return non-nil."
   (save-excursion
     (let ((inhibit-read-only t)
           (png (plist-get result :png))
           (boxes (plist-get result :boxes))
-          (text (wolfram-nb--result-text result)))
-      (goto-char position)
-      (wolfram-nb--delete-following-output)
-      (wolfram-nb--prune-overlays)
-      (cond
-       ((and png boxes)
-        (let ((printed (string-join
-                        (cl-remove-if #'string-empty-p
-                                      (mapcar (lambda (key)
-                                                (string-trim (or (plist-get result key) "")))
-                                              '(:stdout :messages)))
-                        "\n")))
-          (unless (string-empty-p printed)
-            (wolfram-nb--insert-example printed)))
-        (wolfram-nb--insert-graphics-output boxes png))
-       (png
-        (let ((region (wolfram-nb--insert-example
-                       (if (image-type-available-p 'png)
-                           "<binary PNG data>"
-                         (format "<PNG image, %d bytes, saved to %s>"
-                                 (length png) (wolfram-nb--save-png png))))))
-          (wolfram-nb--render-evaluation-output
-           (car region) (cdr region) png code)))
-       ((not (string-empty-p text))
-        (let ((region (wolfram-nb--insert-example
-                       (wolfram-nb--format-output text))))
-          (wolfram-nb--render-evaluation-output
-           (car region) (cdr region) text code))))
+          (text (wolfram-nb--result-text result))
+          (label t))
+      (cl-flet ((next-label () (prog1 label (setq label nil))))
+        (goto-char position)
+        (wolfram-nb--delete-results position)
+        (wolfram-nb--prune-overlays)
+        (cond
+         ((and png boxes)
+          (let ((printed (string-join
+                          (cl-remove-if #'string-empty-p
+                                        (mapcar (lambda (key)
+                                                  (string-trim (or (plist-get result key) "")))
+                                                '(:stdout :messages)))
+                          "\n")))
+            (unless (string-empty-p printed)
+              (wolfram-nb--insert-example printed (next-label))))
+          (wolfram-nb--insert-graphics-output boxes png (next-label)))
+         (png
+          (let ((region (wolfram-nb--insert-example
+                         (if (image-type-available-p 'png)
+                             "<binary PNG data>"
+                           (format "<PNG image, %d bytes, saved to %s>"
+                                   (length png) (wolfram-nb--save-png png)))
+                         (next-label))))
+            (wolfram-nb--render-evaluation-output
+             (car region) (cdr region) png code)))
+         ((not (string-empty-p text))
+          (let ((region (wolfram-nb--insert-example
+                         (wolfram-nb--format-output text) (next-label))))
+            (wolfram-nb--render-evaluation-output
+             (car region) (cdr region) text code)))))
       t)))
 
 ;;;; Evaluation — commands
@@ -2804,21 +2854,23 @@ _PARAMS is the org-babel parameter alist (currently unused)."
   (wolfram-nb--eval-expression-smart body))
 
 (defun wolfram-nb-clear-outputs ()
-  "Remove all evaluation outputs from the buffer.
-That covers example blocks and the Output cells kept verbatim as graphics."
+  "Remove all evaluation results from the buffer.
+That covers #+RESULTS: blocks, example blocks and the Output cells kept
+verbatim as graphics."
   (interactive)
   (save-excursion
     (goto-char (point-min))
     (let ((count 0)
           (inhibit-read-only t))
-      (while (re-search-forward
-              "^[ \t]*\\(#\\+begin_example\\|#\\+ATTR_WOLFRAM:.*:style \"Output\".*:id \"\\)"
-              nil t)
-        (goto-char (match-beginning 0))
-        (let ((end (wolfram-nb--output-block-end)))
+      (while (not (eobp))
+        (let ((end (wolfram-nb--result-item-end)))
           (if end
-              (progn (delete-region (point) end)
-                     (setq count (1+ count)))
+              (progn
+                (dolist (ov (overlays-in (point) end))
+                  (when (overlay-get ov 'wolfram-nb-fold)
+                    (delete-overlay ov)))
+                (delete-region (point) end)
+                (setq count (1+ count)))
             (forward-line 1))))
       (wolfram-nb--prune-overlays)
       (message "Cleared %d output blocks" count))))

@@ -323,6 +323,8 @@ The text is nil for a block without output, and `graphics' for a graphic."
     (while (re-search-forward "^#\\+begin_src wolfram\n" nil t)
       (re-search-forward "^#\\+end_src[ \t]*\n")
       (skip-chars-forward " \t\n")
+      (when (looking-at "#\\+RESULTS:\n")
+        (goto-char (match-end 0)))
       (push (cond
              ((looking-at "#\\+begin_example\n")
               (let ((start (match-end 0)))

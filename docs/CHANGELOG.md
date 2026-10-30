@@ -135,6 +135,15 @@ mode and having the kernel compare the original with the saved file:
   - a notebook whose cell list is not closed was shown as an empty buffer that
     a save would then write over the file; it is now an error, the buffer
     stays read-only with the file's text, and saving it is refused
+- Results are kept the way org-babel keeps them. Evaluating a block puts the
+  output under a `#+RESULTS:` line, and the notebook's own Output and Print
+  cells that follow an Input cell are shown under one too. Evaluating the block
+  again replaces all of them. Before, only a bare example block right after
+  the source block was replaced, so outputs that came with a notebook (they
+  carry a `CellLabel` or other options, and `Print` comes as a cell of its own)
+  stayed and the new result appeared above them. `wolfram-nb-clear-outputs`
+  removes the labels and attributes with the blocks. The label is only a view:
+  it is not written to the `.nb`, and a buffer without it still works
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline

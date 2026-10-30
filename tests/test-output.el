@@ -80,7 +80,7 @@
   (wolfram-nb-test--in-buffer "#+begin_src wolfram\n2+2\n#+end_src\n\nNext paragraph.\n"
     (wolfram-nb--apply-eval-result (save-excursion (re-search-forward "#\\+end_src\n\n") (point))
                                    '(:status "ok" :result "4") "2+2")
-    (should (string-match-p "#\\+end_src\n\n#\\+begin_example\n4\n#\\+end_example\n\nNext paragraph"
+    (should (string-match-p "#\\+end_src\n\n#\\+RESULTS:\n#\\+begin_example\n4\n#\\+end_example\n\nNext paragraph"
                             (buffer-string)))))
 
 (ert-deftest wolfram-nb-output-test-reevaluation-replaces-output ()
@@ -115,7 +115,7 @@
 (ert-deftest wolfram-nb-output-test-block-without-trailing-newline ()
   (wolfram-nb-test--in-buffer "#+begin_src wolfram\n2+2\n#+end_src"
     (wolfram-nb--apply-eval-result (point-max) '(:status "ok" :result "4") "2+2")
-    (should (string-match-p "#\\+end_src\n\n#\\+begin_example\n4\n#\\+end_example\n"
+    (should (string-match-p "#\\+end_src\n\n#\\+RESULTS:\n#\\+begin_example\n4\n#\\+end_example\n"
                             (buffer-string)))))
 
 (ert-deftest wolfram-nb-output-test-forced-png-without-image-support ()
@@ -125,6 +125,108 @@
      (point-max) (list :status "ok" :result "4" :png wolfram-nb-test--png) "2+2")
     (should (> (length wolfram-nb--overlays) 0))
     (should (string-match-p "begin_example\n<" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-result-is-labelled-like-babel ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram
+2+2
+#+end_src
+
+"
+    (wolfram-nb--apply-eval-result (point-max) '(:status "ok" :result "4") "2+2")
+    (should (= (wolfram-nb-test--count "^#\\+RESULTS:$") 1))
+    (should (string-match-p "^#\\+RESULTS:\n#\\+begin_example\n4\n#\\+end_example\n"
+                            (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-reevaluation-replaces-what-a-notebook-came-with ()
+  "Outputs from a notebook carry labels, attributes and come in several cells."
+  (wolfram-nb-test--in-buffer
+      (concat "#+begin_src wolfram
+Print[\"hi\"]; 7\n#+end_src\n\n"
+              "#+ATTR_WOLFRAM: :style \"Print\"\n#+begin_example\nhi\n#+end_example\n\n"
+              "#+NAME: Out[2]=\n#+ATTR_WOLFRAM: CellLabel -> \"Out[2]=\"\n"
+              "#+begin_example\n7\n#+end_example\n\n"
+              "Text after.\n")
+    (wolfram-nb--apply-eval-result
+     (save-excursion (re-search-forward "#\\+end_src\n\n") (point))
+     '(:status "ok" :stdout "hi" :result "7") "Print[\"hi\"]; 7")
+    (should (= (wolfram-nb-test--count "begin_example") 1))
+    (should (= (wolfram-nb-test--count "^#\\+RESULTS:$") 1))
+    (should-not (string-match-p "Out\\[2\\]=\\|:style \"Print\"" (buffer-string)))
+    (should (string-match-p "begin_example\nhi\n7\n#\\+end_example\n\nText after" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-reevaluation-replaces-an-unlabelled-block ()
+  "A result without a #+RESULTS: line, as older buffers have, is replaced too."
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram
+2+2
+#+end_src
+
+#+begin_example
+old
+#+end_example
+"
+    (wolfram-nb--apply-eval-result
+     (save-excursion (re-search-forward "#\\+end_src\n\n") (point))
+     '(:status "ok" :result "4") "2+2")
+    (should (= (wolfram-nb-test--count "begin_example") 1))
+    (should-not (string-match-p "old" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-reevaluation-leaves-the-next-block-results ()
+  (wolfram-nb-test--in-buffer
+      (concat "#+begin_src wolfram
+1\n#+end_src\n\n#+RESULTS:\n#+begin_example\none\n#+end_example\n\n"
+              "#+begin_src wolfram
+2\n#+end_src\n\n#+RESULTS:\n#+begin_example\ntwo\n#+end_example\n")
+    (wolfram-nb--apply-eval-result
+     (save-excursion (re-search-forward "#\\+end_src\n\n") (point))
+     '(:status "ok" :result "ONE") "1")
+    (should (string-match-p "ONE" (buffer-string)))
+    (let ((case-fold-search nil))
+      (should-not (string-match-p "^one$" (buffer-string)))
+      (should (string-match-p "^two$" (buffer-string))))
+    (should (= (wolfram-nb-test--count "begin_example") 2))))
+
+(ert-deftest wolfram-nb-output-test-reevaluation-keeps-other-raw-cells ()
+  "Only Output-like placeholders are results; a raw Text cell stays."
+  (wolfram-nb-test--in-buffer
+      (concat "#+begin_src wolfram\n1\n#+end_src\n\n"
+              "#+ATTR_WOLFRAM: :style \"Section\" :id \"large-cell-9\"\n"
+              "#+begin_src wolfram-raw\nkeep me\n#+end_src\n")
+    (wolfram-nb--apply-eval-result
+     (save-excursion (re-search-forward "#\\+end_src\n\n") (point))
+     '(:status "ok" :result "1") "1")
+    (should (string-match-p "keep me" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-clear-outputs-removes-labels-and-attributes ()
+  (wolfram-nb-test--in-buffer
+      (concat "#+begin_src wolfram\n1\n#+end_src\n\n"
+              "#+RESULTS:\n#+NAME: Out[1]=\n#+ATTR_WOLFRAM: CellLabel -> \"Out[1]=\"\n"
+              "#+begin_example\n1\n#+end_example\n\nClosing text.\n")
+    (wolfram-nb-clear-outputs)
+    (should-not (string-match-p "RESULTS\\|Out\\[1\\]\\|example" (buffer-string)))
+    (should (string-match-p "Closing text" (buffer-string)))
+    (should (string-match-p "begin_src wolfram\n1\n#\\+end_src" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-notebook-outputs-are-shown-under-results ()
+  "Output cells that follow an Input cell get the label; others do not."
+  (let* ((cells (list (wolfram-nb-cell-create :content "1+1" :style "Input")
+                      (wolfram-nb-cell-create :content "hi" :style "Print")
+                      (wolfram-nb-cell-create :content "2" :style "Output")
+                      (wolfram-nb-cell-create :content "Text between." :style "Text")
+                      (wolfram-nb-cell-create :content "orphan" :style "Output")))
+         (org (wolfram-nb--cells-to-org cells)))
+    (should (= 1 (with-temp-buffer (insert org)
+                                   (wolfram-nb-test--count "^#\\+RESULTS:$"))))
+    (should (string-match-p "#\\+end_src\n\n#\\+RESULTS:\n#\\+ATTR_WOLFRAM: :style \"Print\"\n#\\+begin_example\nhi"
+                            org))
+    ;; The label is only a view: converting back gives the same cells.
+    (let ((back (wolfram-nb--org-to-cells org)))
+      (should (= (length back) 5))
+      (should-not (cl-some (lambda (c) (string-match-p "RESULTS" c)) back))
+      (should (equal (mapcar (lambda (c)
+                               (and (string-match ", \"\\([A-Za-z]+\\)\"\\]\\'" c)
+                                    (match-string 1 c)))
+                             back)
+                     '("Input" "Print" "Output" "Text" "Output"))))))
 
 ;;; Graphics output
 
@@ -213,8 +315,8 @@
         (wolfram-nb-eval-buffer))
       (should (equal (nreverse seen) '("a=1;\n" "a+1\n" "a+2\n")))
       (let ((text (buffer-string)))
-        (should (string-match-p "a\\+1\n#\\+end_src\n\n#\\+begin_example\nR(a\\+1)\n#\\+end_example" text))
-        (should (string-match-p "a\\+2\n#\\+end_src\n\n#\\+begin_example\nR(a\\+2)\n#\\+end_example" text))
+        (should (string-match-p "a\\+1\n#\\+end_src\n\n#\\+RESULTS:\n#\\+begin_example\nR(a\\+1)\n#\\+end_example" text))
+        (should (string-match-p "a\\+2\n#\\+end_src\n\n#\\+RESULTS:\n#\\+begin_example\nR(a\\+2)\n#\\+end_example" text))
         (should-not (string-match-p "print(1)\n#\\+end_src\n\n#\\+begin_example" text))
         (should (= (wolfram-nb-test--count "begin_example") 2))))))
 
