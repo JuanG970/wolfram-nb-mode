@@ -360,9 +360,15 @@ Also strips long-string markers \\< and \\> if present, and handles line continu
                 (cond
                  ((and (eq c ?\\) (< (1+ i) n) (eq (aref clean2 (1+ i)) ?\\))
                   (push c out) (push c out) (setq i (+ i 2)))
-                 ((and (eq c ?\\) (string-match "[ \t]*\n" clean2 (1+ i))
-                       (= (match-beginning 0) (1+ i)))
-                  (setq i (match-end 0)))
+                 ;; a backslash, blanks, a newline.  Only the blanks after the
+                 ;; backslash are looked at: a search to the end of the string
+                 ;; for each backslash made a long string quadratic.
+                 ((and (eq c ?\\)
+                       (let ((j (1+ i)))
+                         (while (and (< j n) (memq (aref clean2 j) '(?\s ?\t)))
+                           (setq j (1+ j)))
+                         (and (< j n) (eq (aref clean2 j) ?\n) (setq i (1+ j)))))
+                  nil)
                  (t (push c out) (setq i (1+ i))))))
             (apply #'string (nreverse out))))
     ;; Trim leading/trailing newlines/whitespace if it was a long string
@@ -383,9 +389,11 @@ Also strips long-string markers \\< and \\> if present, and handles line continu
                 ;; of a character escape gets a mark so that it can be told
                 ;; ... or that ends the string, since text may follow it
                 (when (or (and mark-end (= (+ i 2) n))
-                          (and (string-match wolfram-nb--character-escape-regexp
-                                             clean2 (1+ i))
-                               (= (match-beginning 0) (1+ i))))
+                          ;; a character escape is short, so the text it could
+                          ;; be in is cut to a few characters
+                          (eql 0 (string-match
+                                  wolfram-nb--character-escape-regexp
+                                  (substring clean2 (1+ i) (min n (+ i 130))))))
                   (push (aref wolfram-nb--escaped-backslash-mark 0) out))
                 (setq i (+ i 2)))
                ((eq next ?\") (push ?\" out) (setq i (+ i 2)))
@@ -492,9 +500,49 @@ when the expression is not closed."
               (signal 'scan-error (list "Unbalanced expression" start (point))))
             (setq done t))))))))
 
+(defun wolfram-nb--skip-element (limit)
+  "Move point over the list element that starts at point, to its comma or LIMIT."
+  (let ((done nil))
+    (while (not done)
+      (if (re-search-forward "[][{}\"\\\\(,]" limit t)
+          (let ((char (char-before)))
+            (cond
+             ((eq char ?,) (backward-char) (setq done t))
+             ((memq char '(?\[ ?{ ?\")) (backward-char) (wolfram-nb--forward-sexp))
+             ((eq char ?\\)
+              (if (looking-at "\\[[A-Za-z0-9]+\\]")
+                  (goto-char (match-end 0))
+                (when (< (point) limit) (forward-char 1))))
+             ((and (eq char ?\() (eq (char-after) ?*))
+              (forward-char 1)
+              (wolfram-nb--skip-comment-body))))
+        (goto-char limit)
+        (setq done t)))))
+
+(defun wolfram-nb--list-elements (beg end)
+  "Return, as strings, the top-level elements of the list from BEG to END.
+BEG and END delimit the contents of the list.  Comments between elements are
+skipped.  An element need not be a Cell[...]: a template notebook has
+TemplateSlot[...] and the like among its cells."
+  (save-excursion
+    (goto-char beg)
+    (let ((elements '()))
+      (while (progn
+               (skip-chars-forward " \t\n\r,")
+               (while (and (< (point) end) (looking-at "(\\*"))
+                 (forward-char 2)
+                 (wolfram-nb--skip-comment-body)
+                 (skip-chars-forward " \t\n\r,"))
+               (< (point) end))
+        (let ((start (point)))
+          (wolfram-nb--skip-element end)
+          (let ((text (string-trim-right (buffer-substring-no-properties start (point)))))
+            (unless (string-empty-p text) (push text elements)))))
+      (nreverse elements))))
+
 (defun wolfram-nb--is-cellgroupdata (cell-string)
   "Return non-nil if CELL-STRING is a CellGroupData wrapper."
-  (string-prefix-p "Cell[CellGroupData[" cell-string))
+  (string-match-p "\\`Cell\\[[ \t\n]*CellGroupData\\[" cell-string))
 
 (defun wolfram-nb--extract-head-argument (str head)
   "Extract the first argument of HEAD[...] in STR.
@@ -881,32 +929,35 @@ Handles StyleBox for Bold/Italic formatting."
 
 (defun wolfram-nb--box-join (texts)
   "Join TEXTS, separating neighbours that would otherwise fuse into one token."
-  (let ((out ""))
+  (let ((parts '()) (last ""))
     (dolist (text texts)
-      (setq out
-            (cond
-             ((string-empty-p out) text)
-             ((string-empty-p text) out)
-             ((or (and (string-match-p "[[:alnum:]$]\\'" out)
+      (cond
+       ((string-empty-p text))
+       ((string-empty-p last) (push text parts) (setq last text))
+       (t
+        (when (or (and (string-match-p "[[:alnum:]$]\\'" last)
                        (string-match-p "\\`[[:alnum:]$]" text))
-                  (and (string-match-p "[-+]\\'" out)
+                  (and (string-match-p "[-+]\\'" last)
                        (string-match-p "\\`[-+]" text))
-                  (and (string-match-p "[0-9]\\'" out)
+                  (and (string-match-p "[0-9]\\'" last)
                        (string-match-p "\\`\\." text)))
-              (concat out " " text))
-             (t (concat out text)))))
-    out))
+          (push " " parts))
+        (push text parts)
+        (setq last text))))
+    ;; one concatenation at the end: joining as the loop goes is quadratic
+    (apply #'concat (nreverse parts))))
 
 (defun wolfram-nb--box-join-lines (texts)
   "Join the lines TEXTS with newlines, but not where one already is."
-  (let ((out ""))
+  (let ((parts '()) (last ""))
     (dolist (text texts)
-      (setq out (cond
-                 ((string-empty-p out) text)
-                 ((or (string-suffix-p "\n" out) (string-prefix-p "\n" text))
-                  (concat out text))
-                 (t (concat out "\n" text)))))
-    out))
+      (cond
+       ((string-empty-p last) (push text parts))
+       ((or (string-suffix-p "\n" last) (string-prefix-p "\n" text))
+        (push text parts))
+       (t (push "\n" parts) (push text parts)))
+      (setq last text))
+    (apply #'concat (nreverse parts))))
 
 (defconst wolfram-nb--stop-tokens
   '("+" "-" "," ";" "=" ":=" "==" "!=" ">" "<" ">=" "<=" "&&" "||" "->" ":>" "/;"
@@ -1175,6 +1226,9 @@ STYLE is the second argument when it is a string literal, and END is where
 it ends as an index into CELL-STRING.  The argument is located by walking
 the top-level arguments, so strings inside box data cannot be mistaken for
 it."
+  ;; No guess when the walk fails or the second argument is not a style name:
+  ;; a regexp over the whole cell once found `], "Name"' inside the boxes of a
+  ;; cell with no style and gave it that one.
   (or (ignore-errors
         (with-temp-buffer
           (set-syntax-table wolfram-nb--parse-syntax-table)
@@ -1191,8 +1245,7 @@ it."
                             (buffer-substring-no-properties start (point)))))
                   (when (string-match "\\`\"\\([A-Za-z][A-Za-z0-9]*\\)\"\\'" arg)
                     (cons (match-string 1 arg) (1- (point))))))))))
-      (when (string-match "\\],[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
-        (cons (match-string 1 cell-string) (match-end 0)))))
+      ))
 
 (defun wolfram-nb--parse-cell (cell-string)
   "Parse a single Cell[...] structure from CELL-STRING.
@@ -1248,22 +1301,28 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
            :raw-options raw-options
            :boxes textdata-wrapper)))))
 
-   ;; Simple text cell: Cell["text", "Style", ...]
-   ((string-match "\\`Cell\\[\"\\([^\"\\\\]*\\(?:\\\\\\(?:.\\|\n\\)[^\"\\\\]*\\)*\\)\",[ \t\n]*\"\\([A-Z][a-zA-Z]*\\)\"" cell-string)
-    (let ((content-raw (match-string 1 cell-string))
-          (style (match-string 2 cell-string))
-          (raw-options (wolfram-nb--extract-cell-options cell-string (match-end 0))))
-      ;; Extract parsed cell options (CellLabel, etc.) if present
-      (let ((options nil))
-        (when (string-match "CellLabel->\"\\([^\"]*\\)\"" cell-string)
-          (push (cons 'cell-label (match-string 1 cell-string)) options))
-        (wolfram-nb-cell-create
-         :content (wolfram-nb--unescape-string content-raw)
-         :style style
-         :options options
-         :raw-options raw-options
-         :boxes (propertize (concat "\"" content-raw "\"")
-                            'wolfram-nb-literal t)))))
+   ;; Simple text cell: Cell["text", "Style", ...].  The string and the style
+   ;; are found by walking the arguments, not by one regexp: a long string with
+   ;; many escapes overflows the regexp matcher.
+   ((and (string-match-p "\\`Cell\\[\"" cell-string)
+         (wolfram-nb--cell-style-info cell-string)
+         (let ((style (car (wolfram-nb--cell-style-info cell-string))))
+           (string-match-p "\\`[A-Z]" style)))
+    (let* ((info (wolfram-nb--cell-style-info cell-string))
+           (style (car info))
+           (literal (wolfram-nb--extract-first-argument cell-string))
+           (content-raw (substring literal 1 -1))
+           (raw-options (wolfram-nb--extract-cell-options cell-string (cdr info)))
+           (options nil))
+      (when (string-match "CellLabel->\"\\([^\"]*\\)\"" cell-string)
+        (push (cons 'cell-label (match-string 1 cell-string)) options))
+      (wolfram-nb-cell-create
+       :content (wolfram-nb--unescape-string content-raw)
+       :style style
+       :options options
+       :raw-options raw-options
+       :boxes (propertize (concat "\"" content-raw "\"")
+                          'wolfram-nb-literal t))))
 
    ;; Fallback/General parser for any unrecognized Cell[...] structure
    ((string-match "\\`Cell\\[" cell-string)
@@ -1348,8 +1407,9 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
 Such a cell is kept whole: a style it does not have, content that is not text
 or boxes, or dynamic content cannot be written back from what Org shows."
   (cond
+   ((not (string-match-p "\\`Cell\\[" cell-string)) "it is not a cell")
    ((not (wolfram-nb--cell-style-info cell-string)) "it has no style")
-   ((string-prefix-p "Cell[DynamicModuleBox[" cell-string) "it is dynamic content")
+   ((string-match-p "\\`Cell\\[[ \t\n]*DynamicModuleBox\\[" cell-string) "it is dynamic content")
    ((not (string-match-p
           (concat "\\`Cell\\[[ \t\n]*\\(?:\"\\|"
                   "\\(?:BoxData\\|TextData\\|RawData\\|OutputFormData\\|GraphicsData"
@@ -1364,7 +1424,11 @@ instead of being dropped or rewritten; it is recorded in
 `wolfram-nb--parse-verbatim'.  CHAIN is the list of group ids around it."
   (cl-incf wolfram-nb--parse-count)
   (let* ((reason (wolfram-nb--verbatim-reason cell-string))
-         (parsed (and (not reason) (wolfram-nb--parse-cell cell-string))))
+         ;; `Cell[' and its content may be on separate lines in a notebook
+         ;; written readable; the branches below look for them adjoined
+         (parsed (and (not reason)
+                      (wolfram-nb--parse-cell
+                       (replace-regexp-in-string "\\`Cell\\[[ \t\n]+" "Cell[" cell-string)))))
     (unless parsed
       (push (cons wolfram-nb--parse-count (or reason "it could not be read"))
             wolfram-nb--parse-verbatim)
@@ -1395,10 +1459,11 @@ in the cell, usually nothing."
     (insert string)
     (goto-char (point-min))
     (let ((state "Open") (outer ""))
-      (when (re-search-forward "CellGroupData\\[{" nil t)
+      (when (re-search-forward "CellGroupData\\(\\[\\)[ \t\n]*{" nil t)
         (let* ((list-start (1- (point)))
+               (bracket (match-beginning 1))
                (list-end (wolfram-nb--sexp-end list-start))
-               (cgd-end (wolfram-nb--sexp-end (+ (- list-start (length "CellGroupData[")) (length "CellGroupData")))))
+               (cgd-end (wolfram-nb--sexp-end bracket)))
           (when (and list-end cgd-end)
             (let ((raw (string-trim (buffer-substring-no-properties list-end (1- cgd-end)))))
               (when (string-match "\\`,[ \t\n]*\\(.+\\)\\'" raw)
@@ -1423,27 +1488,24 @@ recorded in `wolfram-nb--parse-groups'."
         (with-temp-buffer
           (insert cell-string)
           (goto-char (point-min))
-          (when (re-search-forward "CellGroupData\\[{" nil t)
-            (let ((cells '()))
-              (while (re-search-forward "Cell\\[" nil t)
-                (goto-char (match-beginning 0))
-                (let* ((cell-start (point))
-                       (cell-end (wolfram-nb--find-cell-end cell-start)))
-                  (when cell-end
-                    (let ((inner (buffer-substring-no-properties cell-start cell-end)))
-                      (cond
-                       ((wolfram-nb--is-cellgroupdata inner)
-                        (setq seen-first t)
-                        (setq cells (nconc cells (wolfram-nb--extract-cells-from-group
-                                                  inner inner-chain))))
-                       (t
-                        (let ((parsed (wolfram-nb--parse-one-cell inner inner-chain)))
-                          (unless seen-first
-                            (setq lead (wolfram-nb-cell-style parsed)
-                                  lead-key (car (wolfram-nb-cell-identity parsed))))
-                          (setq seen-first t)
-                          (setq cells (nconc cells (list parsed)))))))
-                    (goto-char cell-end))))
+          (when (re-search-forward "CellGroupData\\[[ \t\n]*{" nil t)
+            (let* ((cells '())
+                   (list-begin (point))
+                   (list-end (wolfram-nb--sexp-end (1- list-begin))))
+              (dolist (inner (wolfram-nb--list-elements
+                              list-begin (if list-end (1- list-end) (point-max))))
+                (cond
+                 ((wolfram-nb--is-cellgroupdata inner)
+                  (setq seen-first t)
+                  (setq cells (nconc cells (wolfram-nb--extract-cells-from-group
+                                            inner inner-chain))))
+                 (t
+                  (let ((parsed (wolfram-nb--parse-one-cell inner inner-chain)))
+                    (unless seen-first
+                      (setq lead (wolfram-nb-cell-style parsed)
+                            lead-key (car (wolfram-nb-cell-identity parsed))))
+                    (setq seen-first t)
+                    (setq cells (nconc cells (list parsed)))))))
               cells)))
       (when wolfram-nb--parse-groups
         (puthash id (list :state (car parts) :outer (cadr parts)
@@ -1518,10 +1580,11 @@ When called from a `wolfram-nb-mode' buffer, also sets
     (with-temp-buffer
       (insert-file-contents file)
       (goto-char (point-min))
-      (unless (re-search-forward "Notebook\\[{" nil t)
+      (unless (re-search-forward "Notebook\\[[ \t\n]*{" nil t)
         (signal 'wolfram-nb-parse-error (list "Not a valid Notebook file" file)))
       (let* ((nb-open (match-beginning 0))
-             (list-end (wolfram-nb--sexp-end (1- (match-end 0))))
+             (list-begin (match-end 0))
+             (list-end (wolfram-nb--sexp-end (1- list-begin)))
              (nb-end (wolfram-nb--sexp-end (+ nb-open (length "Notebook")))))
         (unless list-end
           (signal 'wolfram-nb-parse-error
@@ -1529,16 +1592,13 @@ When called from a `wolfram-nb-mode' buffer, also sets
                                 (line-number-at-pos nb-open))
                         file)))
         (let ((cells '()))
-          (while (re-search-forward "Cell\\[" (or list-end (point-max)) t)
-            (goto-char (match-beginning 0))
-            (let* ((cell-start (point))
-                   (cell-end (wolfram-nb--find-cell-end cell-start)))
-              (when cell-end
-                (let ((cell-str (buffer-substring-no-properties cell-start cell-end)))
-                  (if (wolfram-nb--is-cellgroupdata cell-str)
-                      (setq cells (nconc cells (wolfram-nb--extract-cells-from-group cell-str nil)))
-                    (setq cells (nconc cells (list (wolfram-nb--parse-one-cell cell-str nil))))))
-                (goto-char cell-end))))
+          ;; the elements of the cell list, whatever they are; a Cell[...] inside
+          ;; a TemplateExpression is part of it, not a cell of the notebook
+          (dolist (element (wolfram-nb--list-elements
+                            list-begin (1- list-end)))
+            (if (wolfram-nb--is-cellgroupdata element)
+                (setq cells (nconc cells (wolfram-nb--extract-cells-from-group element nil)))
+              (setq cells (nconc cells (list (wolfram-nb--parse-one-cell element nil))))))
           ;; Extract notebook-level options
           (let ((opts (if list-end
                           (wolfram-nb--notebook-options-between list-end nb-end)
@@ -1792,6 +1852,15 @@ backslash-newline continuation disappears, so no string changes its value."
              ((eq c ?\n) (push ?\\ out) (push ?n out))
              (t (push c out))))
            ((eq c ?\") (push c out) (setq in-string t))
+           ;; a backslash, blanks and a newline outside a string is the line
+           ;; continuation the Front End puts between arguments; it adds no
+           ;; character, and left as it was it would turn into `\ '
+           ((and (eq c ?\\)
+                 (let ((j (1+ i)))
+                   (while (and (< j n) (memq (aref opts j) '(?\s ?\t)))
+                     (setq j (1+ j)))
+                   (and (< j n) (memq (aref opts j) '(?\n ?\r)) (setq i j))))
+            nil)
            ((memq c '(?\s ?\t ?\n ?\r))
             (let ((j i) (newline nil))
               (while (and (< j n) (memq (aref opts j) '(?\s ?\t ?\n ?\r)))
@@ -2055,7 +2124,9 @@ For plain strings, whose asterisks and slashes are not formatting."
             ;; one very long line makes Emacs crawl
             (string-match-p "[^\n]\\{20000\\}" content))
         (wolfram-nb--placeholder-block
-         (wolfram-nb--stash-cell-content content)
+         ;; what is written back is the boxes the cell came from, not the code
+         ;; that was made of them to be shown
+         (wolfram-nb--stash-cell-content (or (wolfram-nb-cell-boxes cell) content))
          style raw-opts
          (cond
           ;; the whole cell, shown as it is when it is short enough to read
@@ -2374,10 +2445,16 @@ it is inserted as-is without extra quotes/escaping."
                         (cached-content (and id
                                              wolfram-nb--large-cells-cache
                                              (gethash id wolfram-nb--large-cells-cache)))
-                        (cell-content (or cached-content value))
                         (parsed-attr (wolfram-nb--parse-attr-wolfram raw-opts))
                         (style (car parsed-attr))
-                        (opts (wolfram-nb--with-label (cdr parsed-attr) name)))
+                        (opts (wolfram-nb--with-label (cdr parsed-attr) name))
+                        ;; a style the mode does not know holds its code as text;
+                        ;; the boxes it came from are written back unless edited
+                        (cell-content (or cached-content
+                                          (car (wolfram-nb--lookup-source
+                                                style (cdr parsed-attr)
+                                                (string-trim-right value "\n")))
+                                          value)))
                    (if (string= style wolfram-nb--verbatim-style)
                        ;; the whole cell: what the block shows, or the kept
                        ;; original when the block only describes it

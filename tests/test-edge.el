@@ -382,5 +382,117 @@ went through the rich-text path and came back with bold and underlined words."
                              cells)))))
       (delete-file file))))
 
+;;; Found by round-tripping the notebooks the Engine ships
+
+(defun wolfram-nb-edge--parse-text (text)
+  "Parse the notebook TEXT; return its cells and the Org view, in a notebook buffer."
+  (let ((file (make-temp-file "wolfram-nb-edge" nil ".nb")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert text))
+          (with-temp-buffer
+            (wolfram-nb-mode)
+            (let ((cells (wolfram-nb--parse-notebook file)))
+              (list cells (wolfram-nb--cells-to-org cells)
+                    (mapcar #'substring-no-properties
+                            (wolfram-nb--org-to-cells (wolfram-nb--cells-to-org cells)))))))
+      (delete-file file))))
+
+(ert-deftest wolfram-nb-edge-test-readable-notebook-is-read ()
+  "SaveReadableNotebook puts a newline and indentation after Notebook[ and Cell[."
+  (pcase-let ((`(,cells ,org ,back)
+               (wolfram-nb-edge--parse-text
+                (concat "Notebook[\n {\n  Cell[CellGroupData[{\n"
+                        "   Cell[\n    \"Title\", \"Section\"],\n"
+                        "   Cell[\n    BoxData[RowBox[{\"1\", \"+\", \"2\"}]], \"Input\"],\n"
+                        "   Cell[\n    TextData[{\"a \", StyleBox[\"b\", FontWeight -> Bold]}], \"Text\"]},\n"
+                        "   Open]]},\n WindowSize -> {500, 400}]\n"))))
+    (should (= (length cells) 3))
+    (should (equal (mapcar #'wolfram-nb-cell-style cells) '("Section" "Input" "Text")))
+    (should (string-match-p "^1 ?\\+ ?2$" org))
+    (should (string-match-p "a \\*b\\*" org))
+    (should (= (length back) 3))
+    (should (string-match-p "FontWeight ?-> ?Bold" (nth 2 back)))
+    ;; and the group is still there when it is saved
+    (should (equal (wolfram-nb-cell-group (car cells)) (wolfram-nb-cell-group (nth 2 cells))))))
+
+(ert-deftest wolfram-nb-edge-test-a-style-from-the-stylesheet-keeps-its-boxes ()
+  "A style the mode does not know holds BoxData; unedited, it comes back as BoxData."
+  (let ((cell "Cell[BoxData[RowBox[{\"f\", \"[\", \"x\", \"]\"}]], \"DeployedWLInput\", CellLabel -> \"In[1]:=\"]"))
+    (pcase-let ((`(,_ ,_ ,back) (wolfram-nb-edge--parse-text (format "Notebook[{\n%s\n}]\n" cell))))
+      (should (= (length back) 1))
+      (should (string-match-p "\\`Cell\\[BoxData\\[RowBox\\[" (car back)))
+      (should (string-match-p "\"DeployedWLInput\"" (car back))))))
+
+(ert-deftest wolfram-nb-edge-test-a-cell-without-a-style-is-not-given-one-from-its-boxes ()
+  "The text `], \"Name\"' inside the boxes of a style-less cell is not its style."
+  (let ((cell (concat "Cell[BoxData[RowBox[{\"f\", \"[\", ButtonBox[\"x\", ButtonFunction :> "
+                      "FrontEndExecute[{FrontEnd`NotebookApply[x], \"OpenCloseGroup\"}]], \"]\"}]],\n"
+                      " CellMargins -> {{0, 0}, {-1, 2}}]")))
+    (should-not (wolfram-nb--cell-style-info cell))
+    (pcase-let ((`(,cells ,_ ,back) (wolfram-nb-edge--parse-text (format "Notebook[{\n%s\n}]\n" cell))))
+      (should (equal (wolfram-nb-cell-style (car cells)) wolfram-nb--verbatim-style))
+      (should (equal back (list cell))))))
+
+(ert-deftest wolfram-nb-edge-test-a-long-string-full-of-escapes-does-not-overflow-the-regexp ()
+  "A plain-string cell once went through a regexp that overflowed on such a string."
+  (let* ((text (apply #'concat (make-list 40000 "a\\\"b\\n")))
+         (cell (format "Cell[\"%s\", \"Text\"]" text)))
+    (should (wolfram-nb-cell-p (wolfram-nb--parse-cell cell)))
+    ;; a string this long took half a minute while each backslash searched to
+    ;; the end of it
+    (let ((start (float-time)))
+      (pcase-let ((`(,_ ,_ ,back) (wolfram-nb-edge--parse-text (format "Notebook[{\n%s\n}]\n" cell))))
+        (should (equal back (list cell))))
+      (should (< (- (float-time) start) 10)))))
+
+(ert-deftest wolfram-nb-edge-test-a-line-continuation-between-arguments-is-dropped ()
+  "The Front End wraps long cells with a backslash and a newline between arguments."
+  (should (equal (wolfram-nb--flatten-options "\"MSG\", \\\n\"x\",\n CellLabel->\"y\"")
+                 "\"MSG\", \"x\", CellLabel->\"y\""))
+  (should (string-match-p "\\`a, +b\\'" (wolfram-nb--flatten-options "a, \\  \n  b")))
+  ;; a backslash that is not a continuation is left alone
+  (should (equal (wolfram-nb--flatten-options "\\[Alpha], b") "\\[Alpha], b"))
+  ;; and a cell written that way comes back as a notebook the kernel can read
+  (let ((cell (concat "Cell[\"text\", \"Message\", \\\n\"MSG\",\n CellLabel->\"During evaluation of In[6]:=\"]")))
+    (pcase-let ((`(,_ ,_ ,back) (wolfram-nb-edge--parse-text (format "Notebook[{\n%s\n}]\n" cell))))
+      (should (string-match-p "\"Message\", \"MSG\"" (car back)))
+      (should-not (string-match-p "\\\\ " (car back))))))
+
+(ert-deftest wolfram-nb-edge-test-list-elements-are-read-whole ()
+  (with-temp-buffer
+    (insert "{Cell[\"a, b\", \"Text\"], (* a, comment *) TemplateSlot[\"x\", {1, 2}],\n"
+            "  Cell[CellGroupData[{Cell[\"c\", \"Text\"]}, Open]], \\[Alpha]}")
+    (should (equal (wolfram-nb--list-elements 2 (1- (point-max)))
+                   '("Cell[\"a, b\", \"Text\"]" "TemplateSlot[\"x\", {1, 2}]"
+                     "Cell[CellGroupData[{Cell[\"c\", \"Text\"]}, Open]]" "\\[Alpha]")))))
+
+(ert-deftest wolfram-nb-edge-test-elements-that-are-not-cells-are-kept ()
+  "A template notebook has TemplateSlot among its cells, and a Cell inside one."
+  (let* ((slot "TemplateSlot[Cell[\"inside\", \"Text\"]]")
+         (expression "TemplateExpression[Cell[\"also inside\", \"Section\"]]")
+         (cells (list "Cell[\"before\", \"Text\"]" slot expression "Cell[\"after\", \"Text\"]")))
+    (pcase-let ((`(,parsed ,_ ,back)
+                 (wolfram-nb-edge--parse-text
+                  (format "Notebook[{\n%s\n}]\n" (string-join cells ",\n")))))
+      ;; four things, not six: what is inside a template is not a cell of the notebook
+      (should (= (length parsed) 4))
+      (should (equal back cells))
+      (should (equal (cl-remove-if-not #'identity
+                                       (mapcar (lambda (c) (and (equal (wolfram-nb-cell-style c)
+                                                                       wolfram-nb--verbatim-style)
+                                                                (wolfram-nb-cell-content c)))
+                                               parsed))
+                     (list slot expression))))))
+
+(ert-deftest wolfram-nb-edge-test-a-large-box-cell-comes-back-as-its-boxes ()
+  "A BoxData cell whose code is one very long line is kept aside, as its boxes."
+  (let* ((items (string-join (make-list 5000 "\"12345\", \",\"") ", "))
+         (cell (format "Cell[BoxData[RowBox[{\"{\", %s, \"}\"}]], \"Output\", CellLabel -> \"Out[1]=\"]"
+                       items)))
+    (pcase-let ((`(,_ ,org ,back) (wolfram-nb-edge--parse-text (format "Notebook[{\n%s\n}]\n" cell))))
+      (should (string-match-p "<Large Cell Block" org))
+      (should (equal back (list cell))))))
+
 (provide 'test-edge)
 ;;; test-edge.el ends here
