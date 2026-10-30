@@ -333,7 +333,7 @@ results of a block, its Print, Message and Output cells, are joined by newlines.
       (let ((texts '()) (graphics nil) (more t))
         (while more
           (cond
-           ((looking-at "#\\+ATTR_WOLFRAM: :style \"Output\" :id ")
+           ((looking-at "\\(?:#\\+NAME:[^\n]*\n\\)?#\\+ATTR_WOLFRAM: :style \"Output\" :id ")
             (setq graphics t)
             (re-search-forward "^#\\+end_src[ \t]*\n")
             (skip-chars-forward " \t\n"))
