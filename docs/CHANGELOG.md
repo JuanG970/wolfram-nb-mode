@@ -222,7 +222,13 @@ mode and having the kernel compare the original with the saved file:
 - A result whose boxes hold dynamic content (a `Manipulate`, an `Animate`) is always
   saved as boxes, whatever its size, so it stays interactive
 - `tests/real/` runs every notebook of a list through the mode and has the kernel judge
-  the saved copy; the Wolfram Engine's own thousand notebooks are the corpus
+  the saved copy; the Wolfram Engine's own 1,030 notebooks are the corpus, and
+  all of them come back with the same cells, groups and options
+- A cell group whose state is an expression over several lines (`Dynamic[...]`)
+  keeps it; it was read as `Open`
+- Dropping a repeated `ExpressionUUID` from the middle of a cell's options keeps
+  the comma between the others, and `$CellContext`ExpressionUUID` is not taken
+  for the identifier
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; a colour or size on a span is dropped once the text of that span is

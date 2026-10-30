@@ -191,6 +191,22 @@ This is what keeps a killed Emacs from leaking the kernel's licence slot."
     (should (wolfram-nb-kernel-ready-p k))
     (should (equal (wolfram-nb-kernel-version k) "fake-1.0"))))
 
+(ert-deftest wolfram-nb-kernel-test-quitting-leaves-the-kernel-busy ()
+  "`C-g' while waiting stops Emacs waiting, not the evaluation.
+The next request queues behind it; there is no way to interrupt a kernel."
+  (wolfram-nb-test--with-fake-kernel k
+    (wolfram-nb-test--eval k "warm")
+    (let ((start (float-time)))
+      (run-with-timer 0.4 nil (lambda () (signal 'quit nil)))
+      (should (eq 'quit (condition-case nil
+                            (wolfram-nb-kernel-eval-sync k "Sleep:2" :wait 20)
+                          (quit 'quit))))
+      (should (< (- (float-time) start) 1.5))
+      (let ((result (wolfram-nb-test--eval k "after")))
+        (should (equal (plist-get result :result) "after"))
+        ;; it had to wait for the sleep to end
+        (should (> (- (float-time) start) 1.8))))))
+
 (ert-deftest wolfram-nb-kernel-test-result-reports-the-kernels-line ()
   "The line, n in In[n] and Out[n], counts up with the evaluations."
   (wolfram-nb-test--with-fake-kernel k

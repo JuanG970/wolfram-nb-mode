@@ -21,6 +21,31 @@ are rendered by the kernel that evaluated them.
   definitions), `C-c C-q` stops it.
 - Evaluation time is limited in the kernel (`wolfram-nb-eval-timeout`). A
   timeout aborts that evaluation and keeps the kernel and its definitions.
+- Each result carries the kernel's `$Line`: the evaluated block is labelled
+  `In[n]:=` and its value `Out[n]=`. It is the third field of the `DONE`
+  line (`DONE <seconds> <status> <line>`); a kernel that does not send it just
+  gives unlabelled cells.
+- A result that is not huge carries its StandardForm boxes (`BOXES`), which is
+  what is written to the notebook as the Output cell. A graphic and anything
+  dynamic (`DynamicModuleBox`, `DynamicBox`) always sends them, so a
+  `Manipulate` stays interactive in Mathematica; any other result with more than
+  100,000 characters of boxes is written as text.
+
+### Interrupting
+
+There is no command to interrupt an evaluation, only the timeout above. Tried
+on a real kernel (Wolfram Engine 15.0):
+
+- over the pipe the protocol uses, `SIGINT` ends the kernel: no interrupt menu,
+  and the pipe closes. A killed kernel can leave its licence slot allocated (see
+  below)
+- on a pseudo-terminal the kernel does print its `Interrupt>` menu, but that
+  means running it with a terminal's I/O, and it cannot be started under
+  `setsid -w`, which is what lets it release its licence when Emacs dies
+
+So an evaluation that must stop is stopped by `wolfram-nb-eval-timeout`, or by
+restarting the kernel (`C-c C-z`), which forgets its definitions. `C-g` in Emacs
+only stops Emacs waiting: the kernel keeps computing until it is done.
 
 Precedence: an HTTP session from `#+WOLFRAM_SESSION:` wins, then the kernel,
 then a fresh `wolframscript` per evaluation (`wolfram-nb-use-kernel` nil, or no
