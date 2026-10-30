@@ -17,15 +17,19 @@
 
 (ert-deftest wolfram-nb-test-parse-endpoint-host-port ()
   (should (equal (wolfram-nb--parse-endpoint "localhost:6061")
-                 '("localhost" . 6061))))
+                 '("localhost" 6061 "/"))))
 
 (ert-deftest wolfram-nb-test-parse-endpoint-port-only ()
   (should (equal (wolfram-nb--parse-endpoint "6061")
-                 '("localhost" . 6061))))
+                 '("localhost" 6061 "/"))))
 
 (ert-deftest wolfram-nb-test-parse-endpoint-custom-host ()
   (should (equal (wolfram-nb--parse-endpoint "192.168.1.10:8080")
-                 '("192.168.1.10" . 8080))))
+                 '("192.168.1.10" 8080 "/"))))
+
+(ert-deftest wolfram-nb-test-parse-endpoint-with-path ()
+  (should (equal (wolfram-nb--parse-endpoint "localhost:6061/evaluate")
+                 '("localhost" 6061 "/evaluate"))))
 
 (ert-deftest wolfram-nb-test-parse-endpoint-nil ()
   (should (null (wolfram-nb--parse-endpoint nil))))
@@ -73,7 +77,7 @@
     (wolfram-nb-mode)
     (insert "#+WOLFRAM_SESSION: localhost:5050\n")
     (wolfram-nb--refresh-session)
-    (should (equal wolfram-nb--session-endpoint '("localhost" . 5050)))
+    (should (equal wolfram-nb--session-endpoint '("localhost" 5050 "/")))
     (should (equal wolfram-nb--session-raw "localhost:5050"))))
 
 (ert-deftest wolfram-nb-test-refresh-session-nothing ()
@@ -90,14 +94,14 @@
     (insert "#+TITLE: Test\n")
     (let ((wolfram-nb-default-session "myhost:9999"))
       (wolfram-nb--refresh-session)
-      (should (equal wolfram-nb--session-endpoint '("myhost" . 9999))))))
+      (should (equal wolfram-nb--session-endpoint '("myhost" 9999 "/"))))))
 
 ;;; Session active-p
 
 (ert-deftest wolfram-nb-test-session-active-p-yes ()
   (with-temp-buffer
     (wolfram-nb-mode)
-    (setq wolfram-nb--session-endpoint '("localhost" . 6061))
+    (setq wolfram-nb--session-endpoint '("localhost" 6061 "/"))
     (should (wolfram-nb--session-active-p))))
 
 (ert-deftest wolfram-nb-test-session-active-p-nil ()
@@ -109,7 +113,7 @@
 (ert-deftest wolfram-nb-test-session-active-p-zero-port ()
   (with-temp-buffer
     (wolfram-nb-mode)
-    (setq wolfram-nb--session-endpoint '("localhost" . 0))
+    (setq wolfram-nb--session-endpoint '("localhost" 0 "/"))
     (should-not (wolfram-nb--session-active-p))))
 
 ;;; Session URL
@@ -117,22 +121,38 @@
 (ert-deftest wolfram-nb-test-session-url ()
   (with-temp-buffer
     (wolfram-nb-mode)
-    (let ((wolfram-nb-session-path "/"))
-      (setq wolfram-nb--session-endpoint '("localhost" . 6061))
-      (should (equal (wolfram-nb--session-url) "http://localhost:6061/")))))
+    (setq wolfram-nb--session-endpoint '("localhost" 6061 "/"))
+    (should (equal (wolfram-nb--session-url) "http://localhost:6061/"))))
 
 (ert-deftest wolfram-nb-test-session-url-custom-path ()
   (with-temp-buffer
     (wolfram-nb-mode)
-    (let ((wolfram-nb-session-path "/eval"))
-      (setq wolfram-nb--session-endpoint '("localhost" . 6061))
-      (should (equal (wolfram-nb--session-url) "http://localhost:6061/eval")))))
+    (setq wolfram-nb--session-endpoint '("localhost" 6061 "/eval"))
+    (should (equal (wolfram-nb--session-url) "http://localhost:6061/eval"))))
 
 (ert-deftest wolfram-nb-test-session-url-no-session ()
   (with-temp-buffer
     (wolfram-nb-mode)
     (setq wolfram-nb--session-endpoint nil)
     (should (null (wolfram-nb--session-url)))))
+
+(ert-deftest wolfram-nb-test-parse-endpoint-with-path-preserves-path ()
+  (should (equal (wolfram-nb--parse-endpoint "localhost:3840/evaluate")
+                 '("localhost" 3840 "/evaluate"))))
+
+(ert-deftest wolfram-nb-test-session-url-uses-endpoint-path ()
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (setq wolfram-nb--session-endpoint '("localhost" 3840 "/evaluate"))
+    (should (equal (wolfram-nb--session-url) "http://localhost:3840/evaluate"))))
+
+(ert-deftest wolfram-nb-test-refresh-session-preserves-path ()
+  (with-temp-buffer
+    (wolfram-nb-mode)
+    (insert "#+WOLFRAM_SESSION: localhost:3840/evaluate\n")
+    (wolfram-nb--refresh-session)
+    (should (equal wolfram-nb--session-endpoint '("localhost" 3840 "/evaluate")))
+    (should (equal (wolfram-nb--session-url) "http://localhost:3840/evaluate"))))
 
 ;;; TaggingRules injection
 
@@ -165,7 +185,7 @@
   (with-temp-buffer
     (wolfram-nb-mode)
     (setq wolfram-nb--session-raw "localhost:6061"
-          wolfram-nb--session-endpoint '("localhost" . 6061)
+          wolfram-nb--session-endpoint '("localhost" 6061 "/")
           wolfram-nb--notebook-options nil)
     (let* ((cells (list "Cell[\"Test\", \"Text\"]"))
            (nb-text (wolfram-nb--cells-to-notebook cells)))
@@ -202,7 +222,7 @@
             (wolfram-nb-mode)
             (let* ((cells (wolfram-nb--parse-notebook temp-file)))
               (should (equal wolfram-nb--session-raw "localhost:6061"))
-              (should (equal wolfram-nb--session-endpoint '("localhost" . 6061)))
+              (should (equal wolfram-nb--session-endpoint '("localhost" 6061 "/")))
               (let ((org-text (wolfram-nb--cells-to-org cells)))
                 (should (string-match "#\\+WOLFRAM_SESSION: localhost:6061" org-text))))))
       (delete-file temp-file))))
@@ -217,7 +237,7 @@
     (goto-char (point-min))
     (should (re-search-forward "#\\+WOLFRAM_SESSION: localhost:8080" nil t))
     (should (equal wolfram-nb--session-raw "localhost:8080"))
-    (should (equal wolfram-nb--session-endpoint '("localhost" . 8080)))))
+    (should (equal wolfram-nb--session-endpoint '("localhost" 8080 "/")))))
 
 (ert-deftest wolfram-nb-test-set-session-updates-existing ()
   (with-temp-buffer
