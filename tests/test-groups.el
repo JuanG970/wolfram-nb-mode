@@ -236,6 +236,78 @@ the Open or Closed of each group.  Groups are numbered as they are met."
       (should-not (cdr shape))
       (should-not (string-match-p "CellGroupData" (wolfram-nb-groups--read file))))))
 
+;;; New notebooks
+
+(defconst wolfram-nb-groups--new-org
+  (concat "#+TITLE: A new notebook\n\n"
+          "* Part\n\n** Section\n\nSome text.\n\n"
+          "#+begin_src wolfram\n1+1\n#+end_src\n\n"
+          "#+RESULTS:\n#+begin_example\n2\n#+end_example\n\n"
+          "** Next\n\nMore text.\n")
+  "Org text for a notebook written from scratch.")
+
+(defconst wolfram-nb-groups--new-shape
+  '((("Title" 1) ("Chapter" 1 2) ("Section" 1 2 3) ("Text" 1 2 3)
+     ("Input" 1 2 3 4) ("Output" 1 2 3 4) ("Section" 1 2 5) ("Text" 1 2 5))
+    . ((1 . "Open") (2 . "Open") (3 . "Open") (4 . "Open") (5 . "Open")))
+  "The groups of `wolfram-nb-groups--new-org', as the Front End makes them.")
+
+(defmacro wolfram-nb-groups--in-new-directory (&rest body)
+  "Run BODY with `dir' bound to a new directory, and remove it and its buffers."
+  (declare (indent 0))
+  `(let ((dir (make-temp-file "wolfram-nb-groups" t)))
+     (unwind-protect
+         (progn ,@body)
+       (dolist (buf (buffer-list))
+         (when (and (buffer-file-name buf) (string-prefix-p dir (buffer-file-name buf)))
+           (with-current-buffer buf (set-buffer-modified-p nil))
+           (kill-buffer buf)))
+       (delete-directory dir t))))
+
+(ert-deftest wolfram-nb-groups-test-notebook-visited-before-it-exists-is-grouped ()
+  (wolfram-nb-groups--in-new-directory
+    (let ((file (expand-file-name "fresh.nb" dir)))
+      (with-current-buffer (find-file-noselect file)
+        (insert wolfram-nb-groups--new-org)
+        (save-buffer)
+        (should (equal (wolfram-nb-groups--shape (wolfram-nb-groups--read file))
+                       wolfram-nb-groups--new-shape))))))
+
+(ert-deftest wolfram-nb-groups-test-empty-notebook-file-is-grouped ()
+  (wolfram-nb-groups--in-new-directory
+    (let ((file (expand-file-name "empty.nb" dir)))
+      (with-temp-file file)
+      (with-current-buffer (find-file-noselect file)
+        (insert wolfram-nb-groups--new-org)
+        (save-buffer)
+        (should (equal (wolfram-nb-groups--shape (wolfram-nb-groups--read file))
+                       wolfram-nb-groups--new-shape))))))
+
+(ert-deftest wolfram-nb-groups-test-notebook-made-with-the-command-is-grouped ()
+  (wolfram-nb-groups--in-new-directory
+    (let ((file (expand-file-name "made.nb" dir)))
+      (wolfram-nb-create-new file)
+      (save-buffer)
+      (should (equal (wolfram-nb-groups--shape (wolfram-nb-groups--read file))
+                     '((("Title" 1) ("Chapter" 1 2) ("Input" 1 2))
+                       . ((1 . "Open") (2 . "Open"))))))))
+
+(ert-deftest wolfram-nb-groups-test-new-notebook-is-stable-when-opened-and-saved-again ()
+  (wolfram-nb-groups--in-new-directory
+    (let ((file (expand-file-name "stable.nb" dir)))
+      (with-current-buffer (find-file-noselect file)
+        (insert wolfram-nb-groups--new-org)
+        (save-buffer)
+        (set-buffer-modified-p nil)
+        (kill-buffer))
+      (let ((first (wolfram-nb-groups--read file)))
+        (with-current-buffer (find-file-noselect file)
+          (set-buffer-modified-p t)
+          (save-buffer)
+          (should (equal first (wolfram-nb-groups--read file)))
+          (should (equal (wolfram-nb-groups--shape (wolfram-nb-groups--read file))
+                         wolfram-nb-groups--new-shape)))))))
+
 ;;; Against the Front End
 
 (defconst wolfram-nb-groups--fe-file

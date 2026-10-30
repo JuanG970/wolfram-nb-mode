@@ -176,6 +176,11 @@ has no cell groups, which is then written without any.")
 (defvar-local wolfram-nb--group-uuids nil
   "Hash table from an ExpressionUUID to (CHAIN), for cells whose content changed.")
 
+(defvar-local wolfram-nb--new-notebook nil
+  "Non-nil in a buffer for a notebook that has no file yet, or an empty one.
+Its cells are given the cell groups the Front End would make; an opened
+notebook that has no groups is written without, as it was.")
+
 (defvar wolfram-nb--parse-groups nil
   "While a notebook is parsed, the hash table collecting its cell groups.")
 
@@ -497,7 +502,7 @@ replaced by a token in the text and put back when the notebook is saved.")
 (dolist (var '(wolfram-nb--cells wolfram-nb--original-file wolfram-nb--notebook-options
                wolfram-nb--cell-count wolfram-nb--large-cells-cache wolfram-nb--box-sources
                wolfram-nb--opaque-parts wolfram-nb--kernel wolfram-nb--group-info
-               wolfram-nb--group-chains wolfram-nb--group-uuids))
+               wolfram-nb--group-chains wolfram-nb--group-uuids wolfram-nb--new-notebook))
   (put var 'permanent-local t))
 
 (defun wolfram-nb--opaque-token (part)
@@ -2284,10 +2289,11 @@ the groups made here, whose ids are negative."
         (puthash base t present)
         (aset styles i (nth 2 identity))
         (aset known i
-              (or (gethash (if (= k 0) base (format "%s\0#%d" base k))
-                           wolfram-nb--group-chains)
-                  (and (not (string-empty-p uuid))
-                       (gethash uuid wolfram-nb--group-uuids))))
+              (and wolfram-nb--group-chains
+                   (or (gethash (if (= k 0) base (format "%s\0#%d" base k))
+                                wolfram-nb--group-chains)
+                       (and (not (string-empty-p uuid))
+                            (gethash uuid wolfram-nb--group-uuids)))))
         (setq i (1+ i))))
     ;; the next cell, after each one, that the notebook knew
     (let ((following nil))
@@ -2395,7 +2401,7 @@ If a session is active, injects TaggingRules into the notebook options."
   (let* ((seen (make-hash-table :test 'equal))
          (strings (mapcar (lambda (cell) (wolfram-nb--drop-repeated-uuid cell seen))
                           cells))
-         (cells-str (if (and wolfram-nb--group-info strings)
+         (cells-str (if (and (or wolfram-nb--group-info wolfram-nb--new-notebook) strings)
                         (let ((resolved (wolfram-nb--resolve-chains cells)))
                           (wolfram-nb--format-groups
                            strings (car resolved) (cdr resolved)))
@@ -2569,6 +2575,7 @@ The buffer visits FILE, so it is saved like any other file."
       (unless (derived-mode-p 'wolfram-nb-mode)
         (wolfram-nb-mode))
       (setq wolfram-nb--original-file (expand-file-name file)
+            wolfram-nb--new-notebook t
             wolfram-nb--cell-count 0)
       (insert "#+TITLE: New Notebook\n\n")
       (insert "* Introduction\n\n")
@@ -3735,6 +3742,11 @@ Cell[...] structure for serialization back to Notebook format.
   "Show a notebook file that was visited with `find-file' as Org text.
 A file that cannot be parsed stays as it is, read-only, so that it is never
 saved back as something else."
+  (when (and buffer-file-name
+             (not wolfram-nb--original-file)
+             (or (not (file-exists-p buffer-file-name))
+                 (zerop (or (file-attribute-size (file-attributes buffer-file-name)) 0))))
+    (setq wolfram-nb--new-notebook t))
   (when (and wolfram-nb-auto-open
              buffer-file-name
              (not wolfram-nb--original-file)

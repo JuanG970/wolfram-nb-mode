@@ -198,6 +198,14 @@ mode and having the kernel compare the original with the saved file:
 - Errors say where: an unclosed cell list gives the line the notebook starts
   on; an evaluation error names the block by its line; evaluating a whole buffer
   lists the lines of the blocks that failed instead of only counting them
+- A new notebook is saved with cell groups. One made with
+  `wolfram-nb-create-new`, one visited at a path that does not exist yet, and an
+  empty file get the groups the Front End would make (sections nested by level,
+  an Input with its results, items with sub-items); before they were saved flat.
+  A notebook opened from a file that has no groups is still written without, so
+  an unedited flat file comes back as it was. The Front End's own grouping of the
+  same cells equals ours on the notebooks checked, items and a Print result
+  included
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline

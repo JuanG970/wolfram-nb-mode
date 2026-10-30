@@ -77,9 +77,10 @@ and compares cells, options and groups; the Front End itself reads both
    items are grouped as the Front End does (1,595 of 1,595 recorded groupings
    reproduced, leaving out consecutive Print, Title and Subtitle cells).
 ** DONE Highlighting only in wolfram source blocks
-** TODO Group the cells of a new notebook
-   A notebook created in Emacs, or opened without groups, is saved flat.
-   About 30 minutes.
+** DONE Group the cells of a new notebook
+   A notebook made in Emacs, visited before it exists, or empty is saved with
+   the Front End's groups. One opened from a file without groups stays flat, so
+   an unedited file comes back as it was.
 ** TODO In[n]:= and Out[n]= labels on evaluated cells
    About 30 minutes.
 ** TODO Check with Mathematica desktop
