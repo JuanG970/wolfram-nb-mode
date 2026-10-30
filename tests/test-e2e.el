@@ -202,6 +202,20 @@ up afterwards; a kernel of the buffer's own is stopped with it."
              (lambda () (string-match-p "begin_example\n55\n" (wolfram-nb-e2e--buffer-text)))
              120))))
 
+(ert-deftest wolfram-nb-e2e-test-a-new-kernel-numbers-its-lines-from-one ()
+  "The first evaluation is In[1], as in a new Front End session."
+  (unless (wolfram-nb-kernel-available-p)
+    (ert-skip "No Wolfram kernel found"))
+  ;; a licence may allow only two processes, see `wolfram-nb-e2e--attach-kernel'
+  (when (wolfram-nb-kernel-live-p wolfram-nb-e2e--shared-kernel)
+    (wolfram-nb-kernel-stop wolfram-nb-e2e--shared-kernel))
+  (let ((kernel (wolfram-nb-kernel-start)))
+    (unwind-protect
+        (progn
+          (should (equal (plist-get (wolfram-nb-kernel-eval-sync kernel "1+1" :wait 120) :line) 1))
+          (should (equal (plist-get (wolfram-nb-kernel-eval-sync kernel "2+2" :wait 30) :line) 2)))
+      (wolfram-nb-kernel-stop kernel))))
+
 (ert-deftest wolfram-nb-e2e-test-killing-the-buffer-stops-the-kernel ()
   (let ((wolfram-nb-e2e--own-kernel t)
         kernel)

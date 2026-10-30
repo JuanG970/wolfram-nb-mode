@@ -193,6 +193,10 @@ loop[] :=
         Exit[0]
     ]
 
+(* A kernel run as a script starts at $Line = 1; the first evaluation should be
+   In[1], as in a new Front End session, and evaluate adds one before it runs. *)
+$Line = 0;
+
 WriteString["stdout", "@@WNB 0 READY " <> $Version <> "\n"];
 
 End[]

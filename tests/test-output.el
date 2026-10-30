@@ -398,6 +398,25 @@ Print[1]; 2\n#+end_src\n\n"
       (should (equal (car (last cells))
                      (format "Cell[BoxData[%s], \"Output\"]" wolfram-nb-test--boxes))))))
 
+(ert-deftest wolfram-nb-output-test-graphics-output-gets-its-label ()
+  "A plot is Out[n]=, like any other value."
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\nGraphics[Circle[]]\n#+end_src\n\n"
+    (let ((result (plist-put (wolfram-nb-test--graphics-result) :line 4))
+          (end (point-max)))
+      (wolfram-nb--apply-eval-result end result "g")
+      (should (string-match-p "#\\+NAME: Out\\[4\\]=\n#\\+ATTR_WOLFRAM: :style \"Output\" :id"
+                              (buffer-string)))
+      (should (equal (car (last (wolfram-nb--org-to-cells (buffer-string))))
+                     (format "Cell[BoxData[%s], \"Output\", CellLabel->\"Out[4]=\"]"
+                             wolfram-nb-test--boxes)))
+      ;; evaluating again replaces the label with the cell
+      ;; the In label moved the end of the block
+      (wolfram-nb--apply-eval-result
+       (wolfram-nb-test--first-block-end) (plist-put result :line 5) "g")
+      (should (= (wolfram-nb-test--count "begin_src wolfram-raw") 1))
+      (should (= (wolfram-nb-test--count "#\\+NAME: Out") 1))
+      (should (string-match-p "#\\+NAME: Out\\[5\\]=" (buffer-string))))))
+
 (ert-deftest wolfram-nb-output-test-graphics-reevaluation-replaces ()
   (wolfram-nb-test--in-buffer "#+begin_src wolfram\nGraphics[Circle[]]\n#+end_src\n\n"
     (let ((end (point-max)))

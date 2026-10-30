@@ -206,12 +206,28 @@ mode and having the kernel compare the original with the saved file:
   an unedited flat file comes back as it was. The Front End's own grouping of the
   same cells equals ours on the notebooks checked, items and a Print result
   included
+- Evaluated cells are labelled `In[n]:=` and `Out[n]=`, from the `$Line` the kernel
+  now reports (the third field of `DONE`). A new kernel starts at `In[1]`, and a
+  plot is `Out[n]=` like any other value. Evaluating again moves the labels
+- Edited text is written with the forms that work in Mathematica. The default
+  stylesheet defines no style named `"Bold"`, `"Italic"`, `"Underlined"` or
+  `"Courier"`, so the `StyleBox[x, "Bold"]` written before showed nothing; it is
+  now `FontWeight->Bold`, `FontSlant->Italic`, `FontVariations->{"Underline"->True}`
+  and `FontFamily->"Courier"`, which is what the Front End writes. Every form is
+  read, including several at once. What Org cannot show, such as a colour or a
+  size on a span, is kept while that text is not edited
+- A saved notebook starts with the Front End's Content-type and magic comments
+  (`wolfram-nb-write-header`); the cache information, whose byte offsets must be
+  exact, is not written
+- A result whose boxes hold dynamic content (a `Manipulate`, an `Animate`) is always
+  saved as boxes, whatever its size, so it stays interactive
+- `tests/real/` runs every notebook of a list through the mode and has the kernel judge
+  the saved copy; the Wolfram Engine's own thousand notebooks are the corpus
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
-  edited; in an edited rich cell, styling other than bold, italic, underline
-  and Courier is dropped; a tab after an Org object becomes a space; the
-  `CellGroupData` nesting is flattened on save; Emacs 28.2 (the CI version)
-  has not been run
+  edited; a colour or size on a span is dropped once the text of that span is
+  edited; a tab after an Org object becomes a space; Emacs 28.2 (the CI
+  version) has not been run
 
 ### Changed
 - Reorganized repository structure following Emacs package best practices

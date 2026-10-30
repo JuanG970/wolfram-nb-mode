@@ -3417,10 +3417,10 @@ cell without options.  NAME, if given, is the cell's CellLabel, as #+NAME:."
             "\n#+end_example\n\n")
     (cons start (point))))
 
-(defun wolfram-nb--insert-graphics-output (boxes png &optional label)
+(defun wolfram-nb--insert-graphics-output (boxes png &optional label name)
   "Insert a kept-verbatim Output cell for BOXES previewed by PNG.
-With LABEL a #+RESULTS: line goes before it.  Returns the (START . END) region
-of the inserted block."
+With LABEL a #+RESULTS: line goes before it.  NAME, if given, is the cell's
+CellLabel, as #+NAME:.  Returns the (START . END) region of the inserted block."
   (let* ((content (format "BoxData[%s]" boxes))
          (id (wolfram-nb--stash-cell-content content)))
     (unless wolfram-nb--png-cache
@@ -3428,6 +3428,7 @@ of the inserted block."
     (puthash id png wolfram-nb--png-cache)
     (wolfram-nb--prepare-insertion)
     (when label (insert "#+RESULTS:\n"))
+    (when name (insert (format "#+NAME: %s\n" name)))
     (let ((start (point)))
       (insert (wolfram-nb--placeholder-block
                id "Output" nil
@@ -3514,7 +3515,8 @@ their own: Print, Message and Output.  Return non-nil."
           (wolfram-nb--insert-example message (next-label) "Message" "\"MSG\""))
         (cond
          ((and png boxes)
-          (wolfram-nb--insert-graphics-output boxes png (next-label)))
+          (wolfram-nb--insert-graphics-output
+           boxes png (next-label) (and line (format "Out[%d]=" line))))
          (png
           (let ((region (wolfram-nb--insert-example
                          (if (image-type-available-p 'png)
