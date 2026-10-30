@@ -235,8 +235,7 @@ mode and having the kernel compare the original with the saved file:
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; a colour or size on a span is dropped once the text of that span is
-  edited; a tab after an Org object becomes a space; Emacs 28.2 (the CI
-  version) has not been run
+  edited; a tab after an Org object becomes a space
 
 ### Changed
 - Reorganized repository structure following Emacs package best practices

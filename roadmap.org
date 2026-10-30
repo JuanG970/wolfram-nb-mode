@@ -52,11 +52,11 @@ and compares cells, options and groups; the Front End itself reads both
 
 * Phase 4: Code Quality & Coverage
 ** DONE Continuous Integration (test, byte-compile)
-** TODO Run the CI Emacs version (28.2)
-   Never run; only a static search for newer functions was done. Needs the
-   user: building Emacs 28.2 on the box was refused, and the CI workflow runs
-   only for master and for pull requests into it, so the branch has to be
-   pushed and a pull request opened.
+** DONE Run the CI Emacs version (28.2)
+   Run by GitHub CI on the draft pull request (JuanG970/wolfram-nb-mode#2).
+   The first run failed one test: Emacs 28.2 starts a process whose program
+   is missing and reports an exit status, where Emacs 29 signals an error.
+   The kernel start now checks the program itself; the second run passed.
 ** DONE Test coverage of the parsing and conversion routines
    About 310 ERT tests, seeded fuzzers (cell/Org conversion, rich text, mixed
    notebooks) and kernel-judged comparisons.
