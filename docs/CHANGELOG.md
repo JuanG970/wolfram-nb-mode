@@ -144,6 +144,24 @@ mode and having the kernel compare the original with the saved file:
   stayed and the new result appeared above them. `wolfram-nb-clear-outputs`
   removes the labels and attributes with the blocks. The label is only a view:
   it is not written to the `.nb`, and a buffer without it still works
+- Cell groups survive a visit in Emacs. Saving flattened every `CellGroupData`,
+  so a notebook came back without its sections folding, its `Input`/`Output`
+  groups or any `Closed` group. The nesting and each group's `Open`/`Closed` is
+  now read when the notebook is opened and written back, and a cell is found
+  again by its content or, when it was edited, by its `ExpressionUUID` (a cell
+  that led a group and was edited keeps leading it). Cells that are new get the
+  groups the Front End gives them: an Input with its results becomes a group,
+  a heading opens a section group, items group with their sub-items. A notebook
+  without any groups stays without. This follows the Front End's own
+  `CellGroupingRules`; 1,595 of 1,595 recorded groupings of realistic cell lists
+  (`tests/corpus/fe-groups.txt`, made by the Front End) are reproduced, apart
+  from consecutive `Print`, `Title` or `Subtitle` cells
+- A notebook written by the Front End (`tests/corpus/fe-grouped.nb`, with the
+  `CellLabel`, `ExpressionUUID`, cache comments and `OutputFormData` results)
+  was not written back unchanged: a `CellLabel` such as `" In[1]:="` lost its
+  leading blank, because Org trims the `#+NAME:` it was copied to, and
+  `OutputFormData[...]` was saved as a quoted string. Both fixed; the kernel now
+  reads the saved file as the same cells and the same groups
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline

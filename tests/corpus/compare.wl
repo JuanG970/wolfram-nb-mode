@@ -44,6 +44,15 @@ codeOf[Cell[b_BoxData, ___]] := normalizeHold @ Quiet @ ToExpression[b, Standard
 codeOf[Cell[s_String, ___]] := normalizeHold @ Quiet @ ToExpression[s, InputForm, Hold]
 codeOf[_] := $Failed
 
+(* The nesting of cell groups, with each group's Open/Closed state, and the
+   styles of the cells: what the cell brackets of the Front End show.  A group
+   with no cell shows nothing, so it is left out. *)
+shape[Cell[CellGroupData[l_List, state___], ___]] :=
+    With[{inner = shape /@ l}, If [inner === {}, Nothing, {"Group", state, inner}]]
+shape[Cell[_, s_String, ___]] := s
+shape[_] := "?"
+shapeOf[nb_] := shape /@ First[nb]
+
 ratio[n_, total_] := ToString[n] <> "/" <> ToString[total]
 
 compare[original_String, saved_String] :=
@@ -60,6 +69,7 @@ compare[original_String, saved_String] :=
                 "cells=" <> ratio[Length[fs], Length[fo]],
                 "exact=" <> ToString[fo === fs],
                 "styles=" <> ToString[styleOf /@ fo === styleOf /@ fs],
+                "groups=" <> ToString[shapeOf[o] === shapeOf[s]],
                 "nbopts=" <> ToString[Rest[o] === Rest[s]],
                 "gfx=" <> ratio[Count[g, i_ /; fo[[i]] === fs[[i]]], Length[g]],
                 "text=" <> ratio[Count[t, i_ /; textOf[fo[[i]]] === textOf[fs[[i]]]], Length[t]],

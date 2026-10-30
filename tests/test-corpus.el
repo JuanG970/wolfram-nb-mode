@@ -292,6 +292,7 @@ be imported."
       (unwind-protect
           (let ((cmp (wolfram-nb-corpus--compare file saved)))
             (should (equal (list name (cdr (assoc "exact" cmp))) (list name "True")))
+            (should (equal (list name (cdr (assoc "groups" cmp))) (list name "True")))
             (should (equal (list name (cdr (assoc "nbopts" cmp))) (list name "True")))
             (should (wolfram-nb-corpus--all-full (cdr (assoc "cells" cmp)))))
         (delete-file saved)))))
@@ -305,6 +306,9 @@ be imported."
       (unwind-protect
           (let ((cmp (wolfram-nb-corpus--compare file saved)))
             (should (equal (list name (cdr (assoc "styles" cmp))) (list name "True")))
+            ;; cells that carry an ExpressionUUID are found again after an edit
+            (when (equal name "fe-grouped.nb")
+              (should (equal (list name (cdr (assoc "groups" cmp))) (list name "True"))))
             (should (equal (list name (cdr (assoc "nbopts" cmp))) (list name "True")))
             (should (wolfram-nb-corpus--all-full (cdr (assoc "cells" cmp))))
             (should (wolfram-nb-corpus--all-full (cdr (assoc "gfx" cmp))))

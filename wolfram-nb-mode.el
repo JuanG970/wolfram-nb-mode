@@ -155,12 +155,32 @@ kernel can be found, every evaluation starts a fresh `wolframscript'."
   (style "Text" :type string :documentation "Cell style (Section, Text, Input, etc.).")
   (options nil :type list :documentation "Alist of parsed options (e.g. CellLabel).")
   (raw-options nil :type string :documentation "Raw string of all cell options (excluding leading comma).")
-  (boxes nil :documentation "The BoxData[...] or TextData[...] string CONTENT was derived from."))
+  (boxes nil :documentation "The BoxData[...] or TextData[...] string CONTENT was derived from.")
+  (identity nil :documentation "(KEY UUID STYLE) that finds this cell again when saving; see `wolfram-nb--cell-identity'.")
+  (group nil :documentation "The cell groups around the cell in the file, outermost first, as ids."))
 
 ;;;; Buffer-local state
 
 (defvar-local wolfram-nb--cells nil
   "List of `wolfram-nb-cell' structs for the current notebook.")
+
+(defvar-local wolfram-nb--group-info nil
+  "Hash table from a cell group id to its plist (:state :outer :lead).
+STATE is the Open or Closed of CellGroupData[{...}, STATE], OUTER any options
+after it, LEAD the style of the group's first cell.  Nil for a notebook that
+has no cell groups, which is then written without any.")
+
+(defvar-local wolfram-nb--group-chains nil
+  "Hash table from a cell identity to (CHAIN), the group ids around that cell.")
+
+(defvar-local wolfram-nb--group-uuids nil
+  "Hash table from an ExpressionUUID to (CHAIN), for cells whose content changed.")
+
+(defvar wolfram-nb--parse-groups nil
+  "While a notebook is parsed, the hash table collecting its cell groups.")
+
+(defvar wolfram-nb--parse-group-count 0
+  "The id given to the latest cell group met while parsing.")
 
 (defvar-local wolfram-nb--overlays nil
   "List of active visual overlays in the current buffer.")
@@ -476,7 +496,8 @@ replaced by a token in the text and put back when the notebook is saved.")
 ;; verbatim and the inline tokens could not be written back.
 (dolist (var '(wolfram-nb--cells wolfram-nb--original-file wolfram-nb--notebook-options
                wolfram-nb--cell-count wolfram-nb--large-cells-cache wolfram-nb--box-sources
-               wolfram-nb--opaque-parts wolfram-nb--kernel))
+               wolfram-nb--opaque-parts wolfram-nb--kernel wolfram-nb--group-info
+               wolfram-nb--group-chains wolfram-nb--group-uuids))
   (put var 'permanent-local t))
 
 (defun wolfram-nb--opaque-token (part)
@@ -1072,30 +1093,116 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
 
 ;;;; CellGroupData extraction
 
-(defun wolfram-nb--extract-cells-from-group (cell-string)
-  "Extract cells from a CellGroupData wrapper in CELL-STRING.
-Returns a list of `wolfram-nb-cell' structs in document order."
+;; The identity of a cell.  An unedited cell is written back with the same
+;; first argument, style and ExpressionUUID it had, so its identity is how a
+;; cell found in the buffer is matched with the cell found in the file.
+(defun wolfram-nb--cell-identity (cell-string)
+  "Return (KEY UUID STYLE) identifying the cell written as CELL-STRING."
+  (let* ((info (wolfram-nb--cell-style-info cell-string))
+         (style (or (car info) ""))
+         (options (and info (wolfram-nb--extract-cell-options cell-string (cdr info))))
+         (uuid (wolfram-nb--cell-uuid options))
+         (first (or (wolfram-nb--extract-first-argument cell-string) "")))
+    ;; The UUID is not in the key: Org cannot carry the options of a list item,
+    ;; so a cell can come back without the UUID it had.
+    (list (concat style "\0" (md5 (replace-regexp-in-string "[ \t\n]+" "" first)))
+          uuid style)))
+
+(defun wolfram-nb--note-cell (cell cell-string chain)
+  "Record in CELL, parsed from CELL-STRING, the group CHAIN it sits in."
+  (setf (wolfram-nb-cell-group cell) chain
+        (wolfram-nb-cell-identity cell) (wolfram-nb--cell-identity cell-string))
+  cell)
+
+(defun wolfram-nb--group-parts (string)
+  "Return (STATE OUTER) for the CellGroupData cell written as STRING.
+STATE is what follows the cell list, OUTER whatever follows CellGroupData[...]
+in the cell, usually nothing."
   (with-temp-buffer
-    (insert cell-string)
+    (set-syntax-table wolfram-nb--parse-syntax-table)
+    (insert string)
     (goto-char (point-min))
-    (when (re-search-forward "CellGroupData\\[{" nil t)
-      (let ((cells '()))
-        (while (re-search-forward "Cell\\[" nil t)
-          (goto-char (match-beginning 0))
-          (let* ((cell-start (point))
-                 (cell-end (wolfram-nb--find-cell-end cell-start)))
-            (when cell-end
-              (let ((inner (buffer-substring-no-properties cell-start cell-end)))
-                (cond
-                 ((wolfram-nb--is-cellgroupdata inner)
-                  (let ((nested (wolfram-nb--extract-cells-from-group inner)))
-                    (setq cells (nconc cells nested))))
-                 (t
-                  (let ((parsed (wolfram-nb--parse-cell inner)))
-                    (when parsed
-                      (setq cells (nconc cells (list parsed))))))))
-              (goto-char cell-end))))
-        cells))))
+    (let ((state "Open") (outer ""))
+      (when (re-search-forward "CellGroupData\\[{" nil t)
+        (let* ((list-start (1- (point)))
+               (list-end (wolfram-nb--sexp-end list-start))
+               (cgd-end (wolfram-nb--sexp-end (+ (- list-start (length "CellGroupData[")) (length "CellGroupData")))))
+          (when (and list-end cgd-end)
+            (let ((raw (string-trim (buffer-substring-no-properties list-end (1- cgd-end)))))
+              (when (string-match "\\`,[ \t\n]*\\(.+\\)\\'" raw)
+                (setq state (match-string 1 raw))))
+            (let ((rest (string-trim
+                         (buffer-substring-no-properties cgd-end (max cgd-end (1- (point-max)))))))
+              (setq outer rest)))))
+      (list state outer))))
+
+(defun wolfram-nb--extract-cells-from-group (cell-string &optional chain)
+  "Extract cells from a CellGroupData wrapper in CELL-STRING.
+Returns a list of `wolfram-nb-cell' structs in document order.  CHAIN is the
+list of group ids around the wrapper; while a notebook is parsed each group is
+recorded in `wolfram-nb--parse-groups'."
+  (let* ((id (cl-incf wolfram-nb--parse-group-count))
+         (parts (wolfram-nb--group-parts cell-string))
+         (inner-chain (append chain (list id)))
+         (lead nil)
+         (lead-key nil)
+         (seen-first nil))
+    (prog1
+        (with-temp-buffer
+          (insert cell-string)
+          (goto-char (point-min))
+          (when (re-search-forward "CellGroupData\\[{" nil t)
+            (let ((cells '()))
+              (while (re-search-forward "Cell\\[" nil t)
+                (goto-char (match-beginning 0))
+                (let* ((cell-start (point))
+                       (cell-end (wolfram-nb--find-cell-end cell-start)))
+                  (when cell-end
+                    (let ((inner (buffer-substring-no-properties cell-start cell-end)))
+                      (cond
+                       ((wolfram-nb--is-cellgroupdata inner)
+                        (setq seen-first t)
+                        (setq cells (nconc cells (wolfram-nb--extract-cells-from-group
+                                                  inner inner-chain))))
+                       (t
+                        (let ((parsed (wolfram-nb--parse-cell inner)))
+                          (when parsed
+                            (wolfram-nb--note-cell parsed inner inner-chain)
+                            (unless seen-first
+                              (setq lead (wolfram-nb-cell-style parsed)
+                                    lead-key (car (wolfram-nb-cell-identity parsed))))
+                            (setq seen-first t)
+                            (setq cells (nconc cells (list parsed))))))))
+                    (goto-char cell-end))))
+              cells)))
+      (when wolfram-nb--parse-groups
+        (puthash id (list :state (car parts) :outer (cadr parts)
+                          :lead lead :lead-key lead-key)
+                 wolfram-nb--parse-groups)))))
+
+(defun wolfram-nb--install-group-tables (cells groups)
+  "Remember the cell groups GROUPS of the parsed notebook with cells CELLS."
+  (setq wolfram-nb--group-info nil
+        wolfram-nb--group-chains nil
+        wolfram-nb--group-uuids nil)
+  (when (and groups (> (hash-table-count groups) 0))
+    (let ((chains (make-hash-table :test 'equal))
+          (uuids (make-hash-table :test 'equal))
+          (counts (make-hash-table :test 'equal)))
+      (dolist (cell cells)
+        (let* ((identity (wolfram-nb-cell-identity cell))
+               (base (car identity))
+               (uuid (cadr identity))
+               (entry (list (wolfram-nb-cell-group cell))))
+          (when base
+            (let ((n (gethash base counts 0)))
+              (puthash base (1+ n) counts)
+              (puthash (if (= n 0) base (format "%s\0#%d" base n)) entry chains)))
+          (when (and uuid (not (string-empty-p uuid)) (not (gethash uuid uuids)))
+            (puthash uuid entry uuids))))
+      (setq wolfram-nb--group-info groups
+            wolfram-nb--group-chains chains
+            wolfram-nb--group-uuids uuids))))
 
 ;;;; Notebook parsing
 
@@ -1129,6 +1236,10 @@ When called from a `wolfram-nb-mode' buffer, also sets
               (make-hash-table :test 'equal))))
     (with-current-buffer calling-buffer
       (setq wolfram-nb--opaque-parts wolfram-nb--parse-opaque))
+    (let ((wolfram-nb--parse-groups (make-hash-table))
+          (wolfram-nb--parse-group-count 0)
+          (cells nil))
+     (setq cells
     (with-temp-buffer
       (insert-file-contents file)
       (goto-char (point-min))
@@ -1148,9 +1259,10 @@ When called from a `wolfram-nb-mode' buffer, also sets
               (when cell-end
                 (let ((cell-str (buffer-substring-no-properties cell-start cell-end)))
                   (if (wolfram-nb--is-cellgroupdata cell-str)
-                      (setq cells (nconc cells (wolfram-nb--extract-cells-from-group cell-str)))
+                      (setq cells (nconc cells (wolfram-nb--extract-cells-from-group cell-str nil)))
                     (let ((parsed (wolfram-nb--parse-cell cell-str)))
                       (when parsed
+                        (wolfram-nb--note-cell parsed cell-str nil)
                         (setq cells (nconc cells (list parsed)))))))
                 (goto-char cell-end))))
           ;; Extract notebook-level options
@@ -1174,7 +1286,10 @@ When called from a `wolfram-nb-mode' buffer, also sets
                   (when session
                     (setq wolfram-nb--session-raw session
                           wolfram-nb--session-endpoint (wolfram-nb--parse-endpoint session)))))))
-          cells)))))
+          cells))))
+     (with-current-buffer calling-buffer
+       (wolfram-nb--install-group-tables cells wolfram-nb--parse-groups))
+     cells)))
 
 ;;;; Cell -> Org conversion
 
@@ -1353,9 +1468,14 @@ get distinct keys in document order."
       (format "%.1fM" (/ (float len) 1048576.0))
     (format "%.1fK" (/ (float len) 1024.0))))
 
+(defconst wolfram-nb--verbatim-head-regexp
+  "\\`\\(?:BoxData\\|TextData\\|RawData\\|DynamicModuleBox\\|OutputFormData\\|GraphicsData\\|CompressedData\\)[ \t\n]*\\["
+  "Heads of the expressions that are a cell's content kept as they are.")
+
 (defun wolfram-nb--box-cell-p (content)
   "Return non-nil if CONTENT is verbatim box data that must not be edited."
-  (string-prefix-p "BoxData[" content))
+  (or (string-prefix-p "BoxData[" content)
+      (string-match-p "\\`\\(?:OutputFormData\\|GraphicsData\\|RawData\\|CompressedData\\)[ \t\n]*\\[" content)))
 
 (defun wolfram-nb--placeholder-block (id style raw-opts label)
   "Return the Org text of a raw placeholder block for cached cell ID.
@@ -1465,8 +1585,11 @@ ATTR is either raw cell options or the keyword form `:style \"S\" :options \"O\"
   "Return the options OPTS with CellLabel set to the block NAME, if any."
   (cond
    ((null name) opts)
-   ((and opts (string-match "CellLabel[ \t\n]*->[ \t\n]*\"[^\"]*\"" opts))
-    (replace-match (format "CellLabel->\"%s\"" name) t t opts))
+   ((and opts (string-match "CellLabel[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"" opts))
+    ;; Org trims the name; a label that differs only in blanks is unchanged
+    (if (string= (string-trim (match-string 1 opts)) (string-trim name))
+        opts
+      (replace-match (format "CellLabel->\"%s\"" name) t t opts)))
    (opts (format "%s, CellLabel->\"%s\"" opts name))
    (t (format "CellLabel->\"%s\"" name))))
 
@@ -1802,7 +1925,7 @@ it is inserted as-is without extra quotes/escaping."
          (final-content
           (cond
            (literal (substring-no-properties content))
-           ((string-match-p "\\`\\(BoxData\\|TextData\\|RawData\\|DynamicModuleBox\\)\\s-*\\[" trimmed)
+           ((string-match-p wolfram-nb--verbatim-head-regexp trimmed)
             trimmed)
            ((and wolfram-nb--opaque-parts
                  (string-match-p wolfram-nb--opaque-regexp trimmed))
@@ -2020,15 +2143,189 @@ cell to have its own."
               (concat (substring cell 0 (cdr info))
                       (replace-match "" t t options)))))))))
 
+(defconst wolfram-nb--grouping-levels
+  '(("Title" . 0) ("Subtitle" . 10) ("Subsubtitle" . 20)
+    ("Chapter" . 10) ("Subchapter" . 20) ("Section" . 30) ("Subsection" . 40)
+    ("Subsubsection" . 50) ("Subsubsubsection" . 60) ("Subsubsubsubsection" . 70)
+    ("Item" . 70) ("ItemNumbered" . 70) ("ItemParagraph" . 80) ("Subitem" . 80)
+    ("SubitemNumbered" . 80) ("SubitemParagraph" . 90) ("Subsubitem" . 90)
+    ("SubsubitemNumbered" . 90) ("SubsubitemParagraph" . 100))
+  "Styles whose cells open a cell group, with their level.
+These are the Front End's own CellGroupingRules: a cell groups the cells after
+it until one of the same or a lower level.")
+
+(defconst wolfram-nb--item-group-styles
+  '("Item" "ItemNumbered" "ItemParagraph" "Subitem" "SubitemNumbered"
+    "SubitemParagraph" "Subsubitem" "SubsubitemNumbered" "SubsubitemParagraph")
+  "Styles of list items, which group with the sub-items after them.")
+
+(defconst wolfram-nb--title-group-styles '("Title" "Subtitle" "Subsubtitle")
+  "Styles whose groups do not nest: a Subtitle inside a Title group is only in it.")
+
+(defun wolfram-nb--group-plist (id synthetic)
+  "Return the plist of the cell group ID, a parsed one or one in SYNTHETIC."
+  (or (and wolfram-nb--group-info (gethash id wolfram-nb--group-info))
+      (gethash id synthetic)))
+
+(defun wolfram-nb--group-closed-by-p (id style synthetic)
+  "Return non-nil if a new, non-result cell of STYLE ends the group ID."
+  (let* ((lead (plist-get (wolfram-nb--group-plist id synthetic) :lead))
+         (lead-level (cdr (assoc lead wolfram-nb--grouping-levels)))
+         (level (cdr (assoc style wolfram-nb--grouping-levels))))
+    (cond
+     ((member lead '("Input" "Code")) t)
+     ((null lead-level) nil)
+     (level (<= level lead-level))
+     ;; the group of an item takes code and results, and ends at prose
+     (t (and (member lead wolfram-nb--item-group-styles)
+             (member style '("Text" "Quote"))
+             t)))))
+
+(defun wolfram-nb--resolve-chains (cell-strings)
+  "Return (CHAINS . SYNTHETIC) for the cells written as CELL-STRINGS.
+CHAINS is a vector with the cell groups around each cell, outermost first.
+A cell that is in the notebook that was opened keeps its groups, found by its
+identity and, when its content was edited, by its ExpressionUUID.  Other cells
+get the groups the Front End would give them: they join the groups of the cell
+before, a heading ends the groups it is not inside of and opens its own, and
+an Input with results becomes a group with them.  SYNTHETIC holds the plists of
+the groups made here, whose ids are negative."
+  (let* ((n (length cell-strings))
+         (styles (make-vector n nil))
+         (known (make-vector n nil))
+         (chains (make-vector n nil))
+         (synthetic (make-hash-table))
+         (opened (make-hash-table))
+         (counts (make-hash-table :test 'equal))
+         (present (make-hash-table :test 'equal))
+         (next-known (make-vector (1+ (length cell-strings)) nil))
+         (next-id 0)
+         (i 0))
+    (dolist (string cell-strings)
+      (let* ((identity (wolfram-nb--cell-identity string))
+             (base (car identity))
+             (uuid (cadr identity))
+             (k (gethash base counts 0)))
+        (puthash base (1+ k) counts)
+        (puthash base t present)
+        (aset styles i (nth 2 identity))
+        (aset known i
+              (or (gethash (if (= k 0) base (format "%s\0#%d" base k))
+                           wolfram-nb--group-chains)
+                  (and (not (string-empty-p uuid))
+                       (gethash uuid wolfram-nb--group-uuids))))
+        (setq i (1+ i))))
+    ;; the next cell, after each one, that the notebook knew
+    (let ((following nil))
+      (cl-loop for k from (1- n) downto 0
+               do (aset next-known k following)
+                  (when (aref known k) (setq following k))))
+    (cl-flet ((new-group (lead)
+                (let ((id (cl-decf next-id)))
+                  (puthash id (list :state "Open" :outer "" :lead lead) synthetic)
+                  id)))
+      (dotimes (i n)
+        (let ((style (aref styles i))
+              (entry (aref known i))
+              (previous (and (> i 0) (aref chains (1- i)))))
+          (aset chains i
+                (cond
+                 (entry (car entry))
+                 ;; the results of an Input go in its group, which is made if
+                 ;; the Input has none yet
+                 ((member style wolfram-nb--result-styles)
+                  (let ((chain previous))
+                    (when (and (> i 0)
+                               (member (aref styles (1- i)) '("Input" "Code"))
+                               (not (member (plist-get
+                                             (wolfram-nb--group-plist
+                                              (car (last chain)) synthetic)
+                                             :lead)
+                                            '("Input" "Code"))))
+                      (setq chain (append chain (list (new-group "Input"))))
+                      (aset chains (1- i) chain)
+                      (dolist (id chain) (puthash id t opened)))
+                    chain))
+                 (t
+                  (let* ((j (aref next-known i))
+                         (next (and j (car (aref known j))))
+                         ;; an edited cell may have led a group the file has:
+                         ;; a group not met yet whose first cell is nowhere
+                         ;; in the buffer and had this cell's style
+                         (lead-of (cl-find-if
+                                   (lambda (id)
+                                     (let ((plist (wolfram-nb--group-plist id synthetic)))
+                                       (and (not (gethash id opened))
+                                            (equal (plist-get plist :lead) style)
+                                            (not (gethash (plist-get plist :lead-key) present)))))
+                                   next)))
+                    (if lead-of
+                        (cl-subseq next 0 (1+ (cl-position lead-of next)))
+                      (let ((chain previous))
+                        (while (and chain
+                                    (wolfram-nb--group-closed-by-p (car (last chain)) style synthetic))
+                          (setq chain (butlast chain)))
+                        (when (and (assoc style wolfram-nb--grouping-levels)
+                                   (not (and (member style wolfram-nb--title-group-styles)
+                                             (cl-some
+                                              (lambda (id)
+                                                (member (plist-get
+                                                         (wolfram-nb--group-plist id synthetic)
+                                                         :lead)
+                                                        wolfram-nb--title-group-styles))
+                                              chain))))
+                          (setq chain (append chain (list (new-group style)))))
+                        chain))))))
+          (dolist (id (aref chains i)) (puthash id t opened)))))
+    ;; the Front End does not group a cell with nothing else
+    (let ((sizes (make-hash-table)))
+      (dotimes (i n)
+        (dolist (id (aref chains i))
+          (when (< id 0) (puthash id (1+ (gethash id sizes 0)) sizes))))
+      (dotimes (i n)
+        (aset chains i (cl-remove-if (lambda (id) (and (< id 0) (= (gethash id sizes) 1)))
+                                     (aref chains i)))))
+    (cons chains synthetic)))
+
+(defun wolfram-nb--format-groups (cell-strings chains synthetic)
+  "Return CELL-STRINGS joined, nested in cell groups as CHAINS says.
+SYNTHETIC holds the groups that are not from the notebook that was opened."
+  (let ((stack '())
+        (top '()))
+    (cl-labels ((add (text)
+                  (if stack (push text (cdr (car stack))) (push text top)))
+                (close ()
+                  (let* ((group (pop stack))
+                         (plist (wolfram-nb--group-plist (car group) synthetic)))
+                    (add (format "Cell[CellGroupData[{\n%s\n}, %s]%s]"
+                                 (string-join (reverse (cdr group)) ",\n")
+                                 (or (plist-get plist :state) "Open")
+                                 (or (plist-get plist :outer) ""))))))
+      (let ((i 0))
+        (dolist (string cell-strings)
+          (let* ((chain (aref chains i))
+                 (current (reverse (mapcar #'car stack)))
+                 (shared (cl-loop for a in current for b in chain
+                                  while (equal a b) count t)))
+            (while (> (length stack) shared) (close))
+            (dolist (id (nthcdr shared chain)) (push (list id) stack))
+            (add string))
+          (setq i (1+ i))))
+      (while stack (close)))
+    (string-join (nreverse top) ",\n")))
+
 (defun wolfram-nb--cells-to-notebook (cells &optional options)
   "Serialize CELLS to a Notebook[{...}] string.
 OPTIONS, if non-nil, is a raw string appended after the cell list.
 If a session is active, injects TaggingRules into the notebook options."
   (let* ((seen (make-hash-table :test 'equal))
-         (cells-str (string-join
-                     (mapcar (lambda (cell) (wolfram-nb--drop-repeated-uuid cell seen))
-                             cells)
-                     ",\n"))
+         (strings (mapcar (lambda (cell) (wolfram-nb--drop-repeated-uuid cell seen))
+                          cells))
+         (cells-str (if (and wolfram-nb--group-info strings)
+                        (let ((resolved (wolfram-nb--resolve-chains cells)))
+                          (wolfram-nb--format-groups
+                           strings (car resolved) (cdr resolved)))
+                      (string-join strings ",\n")))
          (raw-opts (or options
                        (and (local-variable-p 'wolfram-nb--notebook-options)
                             wolfram-nb--notebook-options)))
@@ -2083,7 +2380,10 @@ or Evil's `:w'."
     (setq wolfram-nb--large-cells-cache nil
           wolfram-nb--box-sources nil
           wolfram-nb--opaque-parts nil
-          wolfram-nb--notebook-options nil)
+          wolfram-nb--notebook-options nil
+          wolfram-nb--group-info nil
+          wolfram-nb--group-chains nil
+          wolfram-nb--group-uuids nil)
     (setq cells (wolfram-nb--parse-notebook file))
     (erase-buffer)
     (insert (wolfram-nb--cells-to-org cells))

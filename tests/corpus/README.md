@@ -15,6 +15,15 @@ comment (which lists look-alikes of `Cell[...]`).
 | `unicode.nb`, `unicode-raw.nb` | escaped and raw UTF-8 characters |
 | `edge.nb`, `empty.nb`, `options-only.nb` | empty groups, odd styles, no cells, only options |
 | `eval-*.nb` | notebooks the tests evaluate: state, errors, graphics |
+| `fe-grouped.nb` | written by the Front End itself (Wolfram Engine 15.0, `CreateDocument`, `NotebookEvaluate`, `NotebookSave`): sections, items, evaluated inputs with `CellLabel` and `ExpressionUUID`, the cache comments, a plot. One input group was set to `Closed` by hand. Not produced by `generate.wls` |
+
+`fe-groups.txt` holds the answers of the Front End to a question the parser
+cannot ask it: how does it group a list of cells? Each line is the styles of
+1,785 random but realistic lists (headings, text, items, inputs with the
+results after them), a tab, and the nesting the Front End returned from
+`CreateDocument` and `NotebookGet`. `tests/test-groups.el` checks that the
+groups made for new cells equal these, apart from consecutive `Print`, `Title`
+and `Subtitle` cells, which the Front End groups among themselves.
 
 `manifest.txt` has the true number of cells and notebook options of each
 file, written by the generator, so the tests do not depend on the parser they

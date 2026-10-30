@@ -96,6 +96,7 @@ echo "11. Edge Cases and Fuzzing"
 run_test_file "Edge-case tests" "test-edge.el"
 run_test_file "Highlighting tests" "test-faces.el"
 run_test_file "Workflow tests" "test-workflow.el"
+run_test_file "Cell group tests" "test-groups.el"
 
 echo ""
 echo "12. Byte-compilation"
