@@ -95,11 +95,10 @@ and compares cells, options and groups; the Front End itself reads both
 ** DONE In[n]:= and Out[n]= labels on evaluated cells
    The kernel reports =$Line= (third field of =DONE=); evaluating again moves
    the labels.
-** TODO Check with Mathematica desktop
-   Only the Front End of the Wolfram Engine has read our files so far. Needs
-   the user: =~/wnb-try/for-mathematica.nb= was made by the mode (groups, one
-   closed, formatted text, In/Out labels, Print, Message, a plot, a
-   Manipulate); the Engine's Front End reads it with the same groups.
+** DONE Check with Mathematica desktop
+   =~/wnb-try/for-mathematica.nb= was made by the mode (groups, one closed,
+   formatted text, In/Out labels, Print, Message, a plot, a Manipulate). The
+   user opened it in Wolfram desktop on 2026-10-30 and it looked right.
 ** DONE Styling beyond bold and italic in edited rich cells
    Bold, italic, underline and code are written in the forms the Front End
    writes (the default stylesheet has no styles named "Bold" or "Italic").
