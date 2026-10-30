@@ -329,5 +329,57 @@ went through the rich-text path and came back with bold and underlined words."
                                (list (format "Cell[\"%s\", \"Text\"]" text))))))))
       (delete-file file))))
 
+;;; The scanner that finds where an expression ends
+
+(defun wolfram-nb-edge--sexp-end (text)
+  "Return how many characters of TEXT the expression at its start covers."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (wolfram-nb--forward-sexp)
+    (1- (point))))
+
+(ert-deftest wolfram-nb-edge-test-scanner-reads-named-characters-outside-strings ()
+  "The Front End writes \\[Name] unquoted in code; its ] is not a closing bracket."
+  (should (= (wolfram-nb-edge--sexp-end "[a, \\[Alpha], b] tail") 16))
+  (should (= (wolfram-nb-edge--sexp-end "[$CellContext`\\[CapitalDelta]x = 1] tail") 35))
+  (should (= (wolfram-nb-edge--sexp-end "{\\[Rule], {\\[Times]}} tail") 21)))
+
+(ert-deftest wolfram-nb-edge-test-scanner-skips-strings-and-comments ()
+  (should (= (wolfram-nb-edge--sexp-end "{\"a]\", \"\\\"]\"} tail") 13))
+  ;; a quote inside a comment is not a string, as the kernel reads comments
+  (should (= (wolfram-nb-edge--sexp-end "[(* ] \" *) 1] tail") 13))
+  (should (= (wolfram-nb-edge--sexp-end "[(* (* ] *) ] *) 1] tail") 19))
+  (should (= (wolfram-nb-edge--sexp-end "\"a\\\"b\" tail") 6)))
+
+(ert-deftest wolfram-nb-edge-test-scanner-signals-when-not-closed ()
+  (should-error (wolfram-nb-edge--sexp-end "[a, [b]") :type 'scan-error)
+  (should-error (wolfram-nb-edge--sexp-end "[\"open]") :type 'scan-error)
+  (should-error (wolfram-nb-edge--sexp-end "x[1]") :type 'scan-error))
+
+(ert-deftest wolfram-nb-edge-test-a-closer-with-no-opener-does-not-loop ()
+  "An unbalanced cell once made the argument scanner loop for ever on a `}'."
+  (should (stringp (wolfram-nb--extract-head-argument "Cell[a}b, c]" "Cell")))
+  (should (listp (wolfram-nb--split-args "a}b, c"))))
+
+(ert-deftest wolfram-nb-edge-test-cell-with-named-characters-in-code-keeps-its-extent ()
+  "Such a cell ended early, and the rest of it spilled into the cells after."
+  (let* ((dynamic "Cell[BoxData[DynamicModuleBox[{$CellContext`\\[CapitalDelta]x = 1, y = {2}}, \"x\"]], \"Output\"]")
+         (cells (list "Cell[\"before\", \"Text\"]" dynamic "Cell[\"after\", \"Text\"]"))
+         (file (make-temp-file "wolfram-nb-edge" nil ".nb")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "Notebook[{\n" (string-join cells ",\n") "\n}]\n"))
+          (with-temp-buffer
+            (wolfram-nb-mode)
+            (let ((parsed (wolfram-nb--parse-notebook file)))
+              (should (= (length parsed) 3))
+              (should (equal (wolfram-nb-cell-content (nth 2 parsed)) "after"))
+              (should (equal (mapcar #'substring-no-properties
+                                     (wolfram-nb--org-to-cells (wolfram-nb--cells-to-org parsed)))
+                             cells)))))
+      (delete-file file))))
+
 (provide 'test-edge)
 ;;; test-edge.el ends here

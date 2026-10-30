@@ -422,8 +422,61 @@ Returns the position after the closing bracket, or nil."
       (with-syntax-table wolfram-nb--parse-syntax-table
         (goto-char (+ start 4)) ;; Go to the '['
         (ignore-errors
-          (forward-sexp 1)
+          (wolfram-nb--forward-sexp)
           (point))))))
+
+(defun wolfram-nb--skip-string-body ()
+  "Move point past the end of the string whose opening quote was just read."
+  (let ((start (point)))
+    (while (progn
+             (unless (re-search-forward "[\"\\\\]" nil t)
+               (signal 'scan-error (list "Unterminated string" start (point-max))))
+             (when (eq (char-before) ?\\)
+               (when (eobp) (signal 'scan-error (list "Unterminated string" start (point))))
+               (forward-char 1)
+               t)))))
+
+(defun wolfram-nb--skip-comment-body ()
+  "Move point past the end of the comment whose opening `(*' was just read.
+Comments nest, and a quote inside one does not start a string."
+  (let ((start (point)) (depth 1))
+    (while (> depth 0)
+      (unless (re-search-forward "\\*)\\|(\\*" nil t)
+        (signal 'scan-error (list "Unterminated comment" start (point-max))))
+      (setq depth (if (equal (match-string 0) "*)") (1- depth) (1+ depth))))))
+
+(defun wolfram-nb--forward-sexp ()
+  "Move point over the [...], {...} or string that starts at point.
+Unlike `forward-sexp' this reads what a syntax table cannot: a named character
+such as \\[Alpha], which the Front End writes unquoted in code and whose ]
+must not count as a closing bracket, and (* comments *).  Signal `scan-error'
+when the expression is not closed."
+  (let ((start (point)) (depth 0) (done nil))
+    (unless (memq (char-after) '(?\[ ?{ ?\"))
+      (signal 'scan-error (list "Not at an expression" start start)))
+    (while (not done)
+      (unless (re-search-forward "[][{}\"\\\\(]" nil t)
+        (signal 'scan-error (list "Unbalanced expression" start (point-max))))
+      (let ((char (char-before)))
+        (cond
+         ((eq char ?\")
+          (wolfram-nb--skip-string-body)
+          (when (= depth 0) (setq done t)))
+         ((eq char ?\\)
+          (if (looking-at "\\[[A-Za-z0-9]+\\]")
+              (goto-char (match-end 0))
+            (when (not (eobp)) (forward-char 1))))
+         ((eq char ?\()
+          (when (eq (char-after) ?*)
+            (forward-char 1)
+            (wolfram-nb--skip-comment-body)))
+         ((memq char '(?\[ ?{)) (setq depth (1+ depth)))
+         (t
+          (setq depth (1- depth))
+          (when (<= depth 0)
+            (when (< depth 0)
+              (signal 'scan-error (list "Unbalanced expression" start (point))))
+            (setq done t))))))))
 
 (defun wolfram-nb--is-cellgroupdata (cell-string)
   "Return non-nil if CELL-STRING is a CellGroupData wrapper."
@@ -447,9 +500,11 @@ Returns the raw string content of the first argument, or nil if not found."
                 (cond
                  ((= char ?,)  (setq end (point)))
                  ((= char ?\]) (setq end (point)))
-                 ((= char ?\[) (forward-sexp 1))
-                 ((= char ?{)  (forward-sexp 1))
-                 ((= char ?\") (forward-sexp 1))))
+                 ((= char ?\[) (wolfram-nb--forward-sexp))
+                 ((= char ?{)  (wolfram-nb--forward-sexp))
+                 ((= char ?\") (wolfram-nb--forward-sexp))
+                 ;; a closer with no opener: step over it, never stay on it
+                 (t (forward-char 1))))
             (goto-char (point-max))))
         (when end
           (buffer-substring-no-properties start end))))))
@@ -477,9 +532,9 @@ Returns a list of strings."
                 (push (string-trim (buffer-substring-no-properties start (point))) parts)
                 (forward-char 1)
                 (setq start (point)))
-               ((= char ?\[) (ignore-errors (forward-sexp 1)))
-               ((= char ?{)  (ignore-errors (forward-sexp 1)))
-               ((= char ?\") (ignore-errors (forward-sexp 1)))
+               ((= char ?\[) (ignore-errors (wolfram-nb--forward-sexp)))
+               ((= char ?{)  (ignore-errors (wolfram-nb--forward-sexp)))
+               ((= char ?\") (ignore-errors (wolfram-nb--forward-sexp)))
                (t (forward-char 1))))
           (goto-char (point-max))))
       (push (string-trim (buffer-substring-no-properties start (point))) parts)
@@ -948,9 +1003,10 @@ Returns a cons cell (style . options)."
       (if (re-search-forward "[][{}\",]" nil t)
           (let ((char (char-before)))
             (goto-char (match-beginning 0))
-            (if (memq char '(?, ?\]))
-                (setq done t)
-              (forward-sexp 1)))
+            (cond
+             ((memq char '(?, ?\])) (setq done t))
+             ((memq char '(?\[ ?{ ?\")) (wolfram-nb--forward-sexp))
+             (t (forward-char 1))))
         (goto-char (point-max))))))
 
 (defun wolfram-nb--cell-style-info (cell-string)
@@ -1261,9 +1317,8 @@ recorded in `wolfram-nb--parse-groups'."
 (defun wolfram-nb--sexp-end (pos)
   "Return the position after the balanced expression that starts at POS, or nil."
   (save-excursion
-    (with-syntax-table wolfram-nb--parse-syntax-table
-      (goto-char pos)
-      (ignore-errors (forward-sexp 1) (point)))))
+    (goto-char pos)
+    (ignore-errors (wolfram-nb--forward-sexp) (point))))
 
 (defun wolfram-nb--notebook-options-between (list-end nb-end)
   "Return the notebook options between LIST-END and NB-END, or nil.
