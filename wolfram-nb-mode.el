@@ -1108,6 +1108,55 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
     (list (concat style "\0" (md5 (replace-regexp-in-string "[ \t\n]+" "" first)))
           uuid style)))
 
+(defconst wolfram-nb--verbatim-style "<verbatim>"
+  "The style given to a cell that is kept as the whole cell it was.")
+
+(defvar wolfram-nb--parse-count 0
+  "The number of cells met so far while a notebook is parsed.")
+
+(defvar wolfram-nb--parse-verbatim nil
+  "While a notebook is parsed, (NUMBER . REASON) of the cells kept verbatim.")
+
+(defvar-local wolfram-nb--verbatim-cells nil
+  "(NUMBER . REASON) of the cells of the opened notebook that are kept verbatim.")
+
+(defun wolfram-nb--verbatim-reason (cell-string)
+  "Return why CELL-STRING cannot become an Org cell and back unchanged, or nil.
+Such a cell is kept whole: a style it does not have, content that is not text
+or boxes, or dynamic content cannot be written back from what Org shows."
+  (cond
+   ((not (wolfram-nb--cell-style-info cell-string)) "it has no style")
+   ((string-prefix-p "Cell[DynamicModuleBox[" cell-string) "it is dynamic content")
+   ((not (string-match-p
+          (concat "\\`Cell\\[[ \t\n]*\\(?:\"\\|"
+                  "\\(?:BoxData\\|TextData\\|RawData\\|OutputFormData\\|GraphicsData"
+                  "\\|CompressedData\\)[ \t\n]*\\[\\)")
+          cell-string))
+    "its content is an expression")))
+
+(defun wolfram-nb--parse-one-cell (cell-string chain)
+  "Return the `wolfram-nb-cell' for the cell written as CELL-STRING.
+A cell that cannot be turned into an Org cell and back unchanged is kept whole
+instead of being dropped or rewritten; it is recorded in
+`wolfram-nb--parse-verbatim'.  CHAIN is the list of group ids around it."
+  (cl-incf wolfram-nb--parse-count)
+  (let* ((reason (wolfram-nb--verbatim-reason cell-string))
+         (parsed (and (not reason) (wolfram-nb--parse-cell cell-string))))
+    (unless parsed
+      (push (cons wolfram-nb--parse-count (or reason "it could not be read"))
+            wolfram-nb--parse-verbatim)
+      (setq parsed (wolfram-nb-cell-create :content cell-string
+                                           :style wolfram-nb--verbatim-style)))
+    (wolfram-nb--note-cell parsed cell-string chain)))
+
+(defun wolfram-nb--verbatim-summary (problems)
+  "Return a short description of PROBLEMS, a list of (NUMBER . REASON)."
+  (let ((shown (seq-take problems 3)))
+    (format "%d cell%s kept as %s: %s%s"
+            (length problems) (if (cdr problems) "s" "") (if (cdr problems) "they are" "it is")
+            (mapconcat (lambda (p) (format "cell %d (%s)" (car p) (cdr p))) shown ", ")
+            (if (> (length problems) 3) ", ..." ""))))
+
 (defun wolfram-nb--note-cell (cell cell-string chain)
   "Record in CELL, parsed from CELL-STRING, the group CHAIN it sits in."
   (setf (wolfram-nb-cell-group cell) chain
@@ -1165,14 +1214,12 @@ recorded in `wolfram-nb--parse-groups'."
                         (setq cells (nconc cells (wolfram-nb--extract-cells-from-group
                                                   inner inner-chain))))
                        (t
-                        (let ((parsed (wolfram-nb--parse-cell inner)))
-                          (when parsed
-                            (wolfram-nb--note-cell parsed inner inner-chain)
-                            (unless seen-first
-                              (setq lead (wolfram-nb-cell-style parsed)
-                                    lead-key (car (wolfram-nb-cell-identity parsed))))
-                            (setq seen-first t)
-                            (setq cells (nconc cells (list parsed))))))))
+                        (let ((parsed (wolfram-nb--parse-one-cell inner inner-chain)))
+                          (unless seen-first
+                            (setq lead (wolfram-nb-cell-style parsed)
+                                  lead-key (car (wolfram-nb-cell-identity parsed))))
+                          (setq seen-first t)
+                          (setq cells (nconc cells (list parsed)))))))
                     (goto-char cell-end))))
               cells)))
       (when wolfram-nb--parse-groups
@@ -1238,6 +1285,8 @@ When called from a `wolfram-nb-mode' buffer, also sets
       (setq wolfram-nb--opaque-parts wolfram-nb--parse-opaque))
     (let ((wolfram-nb--parse-groups (make-hash-table))
           (wolfram-nb--parse-group-count 0)
+          (wolfram-nb--parse-count 0)
+          (wolfram-nb--parse-verbatim nil)
           (cells nil))
      (setq cells
     (with-temp-buffer
@@ -1250,7 +1299,9 @@ When called from a `wolfram-nb-mode' buffer, also sets
              (nb-end (wolfram-nb--sexp-end (+ nb-open (length "Notebook")))))
         (unless list-end
           (signal 'wolfram-nb-parse-error
-                  (list "The cell list of the notebook is not closed" file)))
+                  (list (format "The cell list of the notebook that starts at line %d is not closed"
+                                (line-number-at-pos nb-open))
+                        file)))
         (let ((cells '()))
           (while (re-search-forward "Cell\\[" (or list-end (point-max)) t)
             (goto-char (match-beginning 0))
@@ -1260,10 +1311,7 @@ When called from a `wolfram-nb-mode' buffer, also sets
                 (let ((cell-str (buffer-substring-no-properties cell-start cell-end)))
                   (if (wolfram-nb--is-cellgroupdata cell-str)
                       (setq cells (nconc cells (wolfram-nb--extract-cells-from-group cell-str nil)))
-                    (let ((parsed (wolfram-nb--parse-cell cell-str)))
-                      (when parsed
-                        (wolfram-nb--note-cell parsed cell-str nil)
-                        (setq cells (nconc cells (list parsed)))))))
+                    (setq cells (nconc cells (list (wolfram-nb--parse-one-cell cell-str nil))))))
                 (goto-char cell-end))))
           ;; Extract notebook-level options
           (let ((opts (if list-end
@@ -1288,6 +1336,7 @@ When called from a `wolfram-nb-mode' buffer, also sets
                           wolfram-nb--session-endpoint (wolfram-nb--parse-endpoint session)))))))
           cells))))
      (with-current-buffer calling-buffer
+       (setq wolfram-nb--verbatim-cells (reverse wolfram-nb--parse-verbatim))
        (wolfram-nb--install-group-tables cells wolfram-nb--parse-groups))
      cells)))
 
@@ -1764,7 +1813,8 @@ For plain strings, whose asterisks and slashes are not formatting."
          (style (wolfram-nb-cell-style cell))
          (content (wolfram-nb-cell-content cell))
          (raw-opts (wolfram-nb-cell-raw-options cell)))
-    (if (or (wolfram-nb--box-cell-p content)
+    (if (or (string= style wolfram-nb--verbatim-style)
+            (wolfram-nb--box-cell-p content)
             (and (> (length content) 50000)
                  (string-match-p "BoxData\\|GraphicsBox\\|RasterBox\\|CompressedData" content))
             ;; one very long line makes Emacs crawl
@@ -1772,12 +1822,21 @@ For plain strings, whose asterisks and slashes are not formatting."
         (wolfram-nb--placeholder-block
          (wolfram-nb--stash-cell-content content)
          style raw-opts
-         (if (or (> (length content) 50000)
-                 (string-match-p "[^\n]\\{20000\\}" content))
-             (format "<Large Cell Block (%s) - Hidden to prevent Emacs from freezing. Will be preserved on save.>"
-                     (wolfram-nb--format-size (length content)))
+         (cond
+          ;; the whole cell, shown as it is when it is short enough to read
+          ((string= style wolfram-nb--verbatim-style)
+           (if (and (<= (length content) 4000)
+                    (not (string-match-p "[^\n]\\{1000\\}" content)))
+               (org-escape-code-in-string content)
+             (format "<Cell kept as it is (%s) - preserved on save.>"
+                     (wolfram-nb--format-size (length content)))))
+          ((or (> (length content) 50000)
+               (string-match-p "[^\n]\\{20000\\}" content))
+           (format "<Large Cell Block (%s) - Hidden to prevent Emacs from freezing. Will be preserved on save.>"
+                   (wolfram-nb--format-size (length content))))
+          (t
            (format "<Graphics Block (%s) - kept verbatim and preserved on save.>"
-                   (wolfram-nb--format-size (length content)))))
+                   (wolfram-nb--format-size (length content))))))
       (progn
         (wolfram-nb--remember-boxes
          cell (cond
@@ -2078,7 +2137,16 @@ it is inserted as-is without extra quotes/escaping."
                         (parsed-attr (wolfram-nb--parse-attr-wolfram raw-opts))
                         (style (car parsed-attr))
                         (opts (wolfram-nb--with-label (cdr parsed-attr) name)))
-                   (push (wolfram-nb--make-cell-string cell-content style opts) cells)))
+                   (if (string= style wolfram-nb--verbatim-style)
+                       ;; the whole cell: what the block shows, or the kept
+                       ;; original when the block only describes it
+                       (push (string-trim
+                              (if (and cached-content
+                                       (string-prefix-p "<Cell kept as it is" value))
+                                  cached-content
+                                value))
+                             cells)
+                     (push (wolfram-nb--make-cell-string cell-content style opts) cells))))
                 ((string= lang "wolfram-string")
                  (let* ((attr (wolfram-nb--parse-block-attr raw-opts "Text"))
                         (text (string-trim-right value "\n")))
@@ -2403,10 +2471,13 @@ or Evil's `:w'."
           wolfram-nb--cell-count (length cells))
     (wolfram-nb--refresh-session)
     (wolfram-nb-apply-buffer-overlays)
-    (message "Opened %s (%d cells)%s"
+    (message "Opened %s (%d cells)%s%s"
              (file-name-nondirectory file) wolfram-nb--cell-count
              (if wolfram-nb--session-raw
                  (format " [session: %s]" wolfram-nb--session-raw)
+               "")
+             (if wolfram-nb--verbatim-cells
+                 (format "; %s" (wolfram-nb--verbatim-summary wolfram-nb--verbatim-cells))
                ""))))
 
 (defun wolfram-nb--revert-buffer (_ignore-auto _noconfirm)
@@ -3133,21 +3204,26 @@ their own: Print, Message and Output.  Return non-nil."
               (match-string 1 params))
             (org-element-property :end element)))))
 
+(defun wolfram-nb--block-line ()
+  "Return the line on which the source block at point starts."
+  (line-number-at-pos (org-element-property :begin (org-element-at-point))))
+
 (defun wolfram-nb-eval-block ()
   "Evaluate the Wolfram source block at point and insert output below.
 Uses the HTTP session if one is configured, else this buffer's persistent
 kernel, else a fresh wolframscript.  Return non-nil on success."
   (interactive)
   (pcase-let ((`(,code ,format ,end) (wolfram-nb--block-at-point)))
-    (message "Evaluating...")
-    (condition-case err
-        (let ((result (wolfram-nb--eval-detailed code format)))
-          (wolfram-nb--apply-eval-result end result code)
-          (message "Done.")
-          t)
-      (wolfram-nb-eval-error
-       (message "Eval error: %s" (cadr err))
-       nil))))
+    (let ((line (wolfram-nb--block-line)))
+      (message "Evaluating...")
+      (condition-case err
+          (let ((result (wolfram-nb--eval-detailed code format)))
+            (wolfram-nb--apply-eval-result end result code)
+            (message "Done.")
+            t)
+        (wolfram-nb-eval-error
+         (message "Eval error in the block at line %d: %s" line (cadr err))
+         nil)))))
 
 (defun wolfram-nb-eval-buffer ()
   "Evaluate all Wolfram source blocks of the buffer, top to bottom.
@@ -3155,15 +3231,22 @@ Definitions carry over from one block to the next."
   (interactive)
   (save-excursion
     (goto-char (point-min))
-    (let ((count 0) (errors 0))
+    (let ((count 0) (failed '()))
       (while (re-search-forward "^[ \t]*#\\+begin_src[ \t]+wolfram\\([ \t\n]\\|$\\)" nil t)
         (beginning-of-line)
-        (if (wolfram-nb-eval-block)
-            (setq count (1+ count))
-          (setq errors (1+ errors)))
+        (let ((line (wolfram-nb--block-line)))
+          (if (wolfram-nb-eval-block)
+              (setq count (1+ count))
+            (push line failed)))
         (when (re-search-forward "^[ \t]*#\\+end_src" nil t)
           (forward-line 1)))
-      (message "Evaluated %d blocks (%d errors)" count errors))))
+      (setq failed (nreverse failed))
+      (message "Evaluated %d blocks (%d errors%s)" count (length failed)
+               (if failed
+                   (format ", at line%s %s%s" (if (cdr failed) "s" "")
+                           (mapconcat #'number-to-string (seq-take failed 5) ", ")
+                           (if (> (length failed) 5) ", ..." ""))
+                 "")))))
 
 ;;;; Evaluation — asynchronous
 
@@ -3172,6 +3255,7 @@ Definitions carry over from one block to the next."
   (interactive)
   (pcase-let ((`(,code ,format ,end) (wolfram-nb--block-at-point)))
     (let ((end-marker (copy-marker end))
+          (line (wolfram-nb--block-line))
           (buf (current-buffer)))
       (message "Evaluating (async)...")
       (wolfram-nb--eval-detailed-async
@@ -3180,7 +3264,7 @@ Definitions carry over from one block to the next."
          (when (buffer-live-p buf)
            (with-current-buffer buf
              (if error-msg
-                 (message "Async eval error: %s" error-msg)
+                 (message "Async eval error in the block at line %d: %s" line error-msg)
                (wolfram-nb--apply-eval-result end-marker result code)
                (message "Async eval complete."))))
          (set-marker end-marker nil))))))

@@ -185,6 +185,19 @@ mode and having the kernel compare the original with the saved file:
     `_quirks_`), once edited, came back with bold and underlined words: Org
     reads such lines as headlines, where it sees no markup, so the cell took
     the rich-text path. A plain string now never does
+- Cells the parser could not turn into an Org cell and back were dropped or
+  rewritten, with no message: a cell with no style (`Cell[BoxData[...]]`,
+  `Cell["text"]`, or only options after the content) was dropped or given a
+  style, top-level `DynamicModuleBox` content became the text
+  `[Dynamic content]`, and `Cell[Sin[x], "Input"]` became the string
+  `"Sin[x]"`. Such a cell is now kept as the whole cell it was, shown in a raw
+  block (the cell itself when short, a description when large) that can be
+  edited, and opening the notebook says which cells they are:
+  `Opened n.nb (13 cells); 6 cells kept as they are: cell 2 (it has no style), ...`.
+  The kernel and the Front End read the saved file as the same cells
+- Errors say where: an unclosed cell list gives the line the notebook starts
+  on; an evaluation error names the block by its line; evaluating a whole buffer
+  lists the lines of the blocks that failed instead of only counting them
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline

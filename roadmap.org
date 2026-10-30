@@ -38,9 +38,11 @@ and compares cells, options and groups; the Front End itself reads both
 ** DONE Typed errors for parse and evaluation failures
    =wolfram-nb-parse-error= and =wolfram-nb-eval-error= name the file, or the
    kernel's status and time.
-** TODO Say which cell failed
-   Errors do not give a cell number, and a cell that cannot be parsed is
-   skipped without a message (a code path; not seen on a real notebook).
+** DONE Say which cell failed
+   A cell that cannot be shown as Org (no style, content that is an
+   expression, dynamic content) is kept whole instead of being dropped, and
+   opening the notebook names it. Errors give the line of the cell list or of
+   the block.
 ** DONE Automatic configuration of wolframscript paths and sessions
 
 * Phase 4: Code Quality & Coverage
