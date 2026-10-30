@@ -174,6 +174,17 @@ mode and having the kernel compare the original with the saved file:
   the saved files in the Front End: it reads a notebook saved by Emacs as
   the same cells and groups as the original (`tests/corpus/fe-reads.wls`), and
   an evaluated notebook as Section > Input, Print, Message, Output
+- Two more losses found by round-tripping a real 9.6 MB, 107-cell notebook with
+  33 cell groups, 19 graphics and real options (opens in 3.8 s, saves in 2 s):
+  - the Front End wraps long strings with a backslash and a newline, which
+    splits an `ExpressionUUID`; a cell whose UUID was wrapped was not found
+    again and its boxes were rewritten as a string. The wrap is ignored when
+    reading a UUID. The kernel now reads the saved file as exactly the same
+    cells, options and groups, and the Front End as the same notebook
+  - a plain text cell holding Markdown-like lines (`* Cover *all* reports.`,
+    `_quirks_`), once edited, came back with bold and underlined words: Org
+    reads such lines as headlines, where it sees no markup, so the cell took
+    the rich-text path. A plain string now never does
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline

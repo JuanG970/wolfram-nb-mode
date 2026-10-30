@@ -1411,9 +1411,11 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
             res-cons)))))))
 
 (defun wolfram-nb--cell-uuid (opts)
-  "Return the ExpressionUUID in the cell options OPTS, or an empty string."
+  "Return the ExpressionUUID in the cell options OPTS, or an empty string.
+The Front End wraps a long string with a backslash and a newline, which adds
+no character; the identifier is returned without them."
   (if (and opts (string-match "ExpressionUUID[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"" opts))
-      (match-string 1 opts)
+      (replace-regexp-in-string "\\\\\n[ \t]*" "" (match-string 1 opts))
     ""))
 
 (defun wolfram-nb--optionless-style-p (style)
@@ -1856,9 +1858,13 @@ For plain strings, whose asterisks and slashes are not formatting."
           (format "%s%s\n\n"
                   (wolfram-nb--attr-line style "Text" raw-opts)
                   content))
+         ;; Text that is not a paragraph stays literal unless the cell is rich:
+         ;; the markers in a plain string are not formatting even where Org
+         ;; would read them as part of a headline or a list.
          (t
-          (format "%s#+begin_src wolfram-text\n%s\n#+end_src\n\n"
+          (format "%s#+begin_src %s\n%s\n#+end_src\n\n"
                   (wolfram-nb--attr-line style "Text" raw-opts)
+                  (if (wolfram-nb-cell-boxes-rich-p cell) "wolfram-text" "wolfram-string")
                   (org-escape-code-in-string content)))))
 
        ;; Code Blocks

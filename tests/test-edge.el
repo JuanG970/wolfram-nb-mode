@@ -288,5 +288,46 @@
       (should (string-match-p "output cut: 100 of 500" cut))
       (should (< (length cut) 200)))))
 
+(ert-deftest wolfram-nb-edge-test-uuid-wrapped-by-the-front-end ()
+  "The Front End wraps long strings with a backslash and a newline.  A cell
+whose ExpressionUUID is wrapped is still written back as the boxes it had."
+  (let ((file (make-temp-file "wolfram-nb-edge" nil ".nb")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "Notebook[{\n"
+                    "Cell[BoxData[RowBox[{\"f\", \"[\", \"x\", \"]\"}]], \"Input\",\n"
+                    " ExpressionUUID->\"76d23fec-ea85-4295-a92e-\\\n0123456789ab\"]\n"
+                    "}]\n"))
+          (with-temp-buffer
+            (wolfram-nb-mode)
+            (let* ((cells (wolfram-nb--parse-notebook file))
+                   (back (wolfram-nb--org-to-cells (wolfram-nb--cells-to-org cells))))
+              (should (= (length back) 1))
+              (should (string-prefix-p "Cell[BoxData[RowBox[" (car back)))
+              (should (equal (wolfram-nb--cell-uuid (wolfram-nb-cell-raw-options (car cells)))
+                             "76d23fec-ea85-4295-a92e-0123456789ab")))))
+      (delete-file file))))
+
+(ert-deftest wolfram-nb-edge-test-plain-text-with-markdown-markers-stays-plain ()
+  "A plain string with `* item' and `*word*' lines is not formatting.
+Org reads the lines as headlines, where it finds no markup, so the cell once
+went through the rich-text path and came back with bold and underlined words."
+  (let ((file (make-temp-file "wolfram-nb-edge" nil ".nb"))
+        (text "Goals:\\n\\n* Cover *all* reports.\\n\\n* Document any _quirks_ found."))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (format "Notebook[{\nCell[\"%s\", \"Text\"]\n}]\n" text)))
+          (with-temp-buffer
+            (wolfram-nb-mode)
+            (let ((cells (wolfram-nb--parse-notebook file)))
+              (let ((org (wolfram-nb--cells-to-org cells)))
+                ;; as an edited cell: the originals are forgotten
+                (setq wolfram-nb--box-sources nil)
+                (should (equal (wolfram-nb--org-to-cells org)
+                               (list (format "Cell[\"%s\", \"Text\"]" text))))))))
+      (delete-file file))))
+
 (provide 'test-edge)
 ;;; test-edge.el ends here
