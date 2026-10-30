@@ -90,9 +90,10 @@
 (ert-deftest wolfram-nb-edge-test-touching-styled-spans-stay-styled ()
   (let* ((cell "Cell[TextData[{StyleBox[\"bold\", \"Bold\"], StyleBox[\"italic\", \"Italic\"], \"x\", StyleBox[\"code\", \"Courier\"]}], \"Text\"]")
          (back (cadr (cdr (wolfram-nb-fuzz--round-trip (list "Cell[\"b\", \"Text\"]" cell))))))
-    (should (string-match-p "StyleBox\\[\"bold\", \"Bold\"\\]" back))
-    (should (string-match-p "StyleBox\\[\"italic\", \"Italic\"\\]" back))
-    (should (string-match-p "StyleBox\\[\"code\", \"Courier\"\\]" back))
+    ;; the style names read here are written as the forms that work
+    (should (string-match-p "StyleBox\\[\"bold\", FontWeight->Bold\\]" back))
+    (should (string-match-p "StyleBox\\[\"italic\", FontSlant->Italic\\]" back))
+    (should (string-match-p "StyleBox\\[\"code\", FontFamily->\"Courier\"\\]" back))
     ;; no marker characters and no invisible separators leak into the file
     (should-not (string-match-p "[\u200b]" back))))
 
@@ -148,7 +149,7 @@
     (wolfram-nb-mode)
     (let ((cells (wolfram-nb--org-to-cells "x *one [[http://a.b][c]] two* y\n")))
       (should (= (length cells) 1))
-      (should (string-match-p "StyleBox\\[\"one \\[\\[http://a.b\\]\\[c\\]\\] two\", \"Bold\"\\]"
+      (should (string-match-p "StyleBox\\[\"one \\[\\[http://a.b\\]\\[c\\]\\] two\", FontWeight->Bold\\]"
                               (car cells))))))
 
 (ert-deftest wolfram-nb-edge-test-link-written-as-it-was ()

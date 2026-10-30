@@ -1,0 +1,101 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='WolframEngine 15.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       160,          7]
+NotebookDataLength[      2278,         91]
+NotebookOptionsPosition[      1604,         71]
+NotebookOutlinePosition[      2021,         88]
+CellTagsIndexPosition[      1978,         85]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+
+Cell[CellGroupData[{
+Cell["Formatting written by the Front End", "Section",ExpressionUUID->"f91a63a7-61be-427a-b12b-f3473b8db721"],
+
+Cell[TextData[{
+ "plain ",
+ StyleBox["bold",
+  FontWeight->Bold],
+ " ",
+ StyleBox["italic",
+  FontSlant->Italic],
+ " ",
+ StyleBox["underlined",
+  FontVariations->{"Underline"->True}],
+ " ",
+ StyleBox["code",
+  FontFamily->"Courier"],
+ " ",
+ StyleBox["weight",
+  FontWeight->Bold],
+ " ",
+ StyleBox["slant",
+  FontSlant->Italic],
+ " end."
+}], "Text",ExpressionUUID->"f834ea92-e2cc-49c4-954a-70e4da299de6"],
+
+Cell[TextData[{
+ "coloured ",
+ StyleBox["red",
+  FontColor->RGBColor[1, 0, 0]],
+ " and ",
+ StyleBox["bold red",
+  FontWeight->Bold,
+  FontColor->RGBColor[1, 0, 0]],
+ " and ",
+ StyleBox["big",
+  FontSize->20],
+ " and ",
+ StyleBox["both",
+  FontWeight->Bold,
+  FontSlant->Italic],
+ "."
+}], "Text",ExpressionUUID->"f5427675-789a-48e4-be4b-3279e8c8610d"],
+
+Cell[TextData[{
+ "Item with ",
+ StyleBox["bold",
+  FontWeight->Bold]
+}], "Item",ExpressionUUID->"ce0c0b12-4b92-48d7-97a6-9465024d81b5"]
+}, Open  ]]
+},
+WindowSize->{537.75, 519.75},
+WindowMargins->{{30.75, Automatic}, {Automatic, 39.75}},
+Visible->False,
+FrontEndVersion->"15.0 for Linux x86 (64-bit) (May 26, 2026)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"9f00d3a2-c7e2-4d89-8c3c-00d5adc4741a"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[CellGroupData[{
+Cell[582, 22, 109, 0, 70, "Section",ExpressionUUID->"f91a63a7-61be-427a-b12b-f3473b8db721"],
+Cell[694, 24, 403, 20, 70, "Text",ExpressionUUID->"f834ea92-e2cc-49c4-954a-70e4da299de6"],
+Cell[1100, 46, 350, 16, 70, "Text",ExpressionUUID->"f5427675-789a-48e4-be4b-3279e8c8610d"],
+Cell[1453, 64, 135, 4, 70, "Item",ExpressionUUID->"ce0c0b12-4b92-48d7-97a6-9465024d81b5"]
+}, Open  ]]
+}
+]
+*)
+
+(* End of internal cache information *)
+

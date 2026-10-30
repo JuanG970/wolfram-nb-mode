@@ -53,6 +53,33 @@ shape[Cell[_, s_String, ___]] := s
 shape[_] := "?"
 shapeOf[nb_] := shape /@ First[nb]
 
+(* The formatting of a text cell as the Front End shows it: its text, with the
+   flags (bold, italic, underline, code) of the spans around each piece.  A
+   style name the stylesheet does not define shows nothing, but is counted as
+   what it was meant to be, since earlier versions wrote those. *)
+flagOf[Bold | "Bold" | (FontWeight -> (Bold | "Bold" | "SemiBold"))] := "b"
+flagOf[Italic | "Italic" | (FontSlant -> (Italic | "Italic" | "Oblique"))] := "i"
+flagOf[Underlined | "Underlined"] := "u"
+flagOf[FontVariations -> v_] /; !FreeQ[v, "Underline" -> True] := "u"
+flagOf[FontFamily -> ("Courier" | "Courier New" | "Courier Std")] := "c"
+flagOf["Courier"] := "c"
+flagOf[_] := Nothing
+
+spanFlags[opts_List] := Union @ Flatten @ Map[flagOf, Flatten[opts]]
+
+pieces[c_String, flags_] := {{StringReplace[c, WhitespaceCharacter .. -> ""], flags}}
+pieces[c_List, flags_] := Flatten[pieces[#, flags] & /@ c, 1]
+pieces[StyleBox[x_, opts___], flags_] := pieces[x, Union[flags, spanFlags[{opts}]]]
+pieces[(ButtonBox | TooltipBox)[x_, ___], flags_] := pieces[x, flags]
+pieces[_, _] := {}
+
+mergePieces[l_List] :=
+    Map[{StringJoin[#[[All, 1]]], #[[1, 2]]} &, Split[DeleteCases[l, {"", _}], #1[[2]] === #2[[2]] &]]
+
+styledOf[Cell[TextData[t_], ___]] := mergePieces[pieces[t, {}]]
+styledOf[Cell[s_String, ___]] := mergePieces[pieces[s, {}]]
+styledOf[_] := $Failed
+
 ratio[n_, total_] := ToString[n] <> "/" <> ToString[total]
 
 compare[original_String, saved_String] :=
@@ -73,6 +100,7 @@ compare[original_String, saved_String] :=
                 "nbopts=" <> ToString[Rest[o] === Rest[s]],
                 "gfx=" <> ratio[Count[g, i_ /; fo[[i]] === fs[[i]]], Length[g]],
                 "text=" <> ratio[Count[t, i_ /; textOf[fo[[i]]] === textOf[fs[[i]]]], Length[t]],
+                "styled=" <> ratio[Count[t, i_ /; styledOf[fo[[i]]] === styledOf[fs[[i]]]], Length[t]],
                 "code=" <> ratio[Count[c, i_ /; codeOf[fo[[i]]] === codeOf[fs[[i]]] && codeOf[fo[[i]]] =!= $Failed], Length[c]],
                 "opts=" <> ratio[Count[op, i_ /; Drop[List @@ fo[[i]], 2] === Drop[List @@ fs[[i]], 2]], Length[op]]
             },

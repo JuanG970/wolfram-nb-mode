@@ -601,6 +601,141 @@ AFTER-SPAN that RESULT ends with one."
                 "")
               text)))))
 
+(defvar-local wolfram-nb--span-sources nil
+  "Hash table from a styled span's flags and text to the StyleBox it came from.
+A span written back with the same flags and text keeps the options Org cannot
+show: colours, sizes, anything but bold, italic, underline and code.")
+(put 'wolfram-nb--span-sources 'permanent-local t)
+
+(defconst wolfram-nb--span-markers
+  '((?b . "*") (?i . "/") (?u . "_") (?c . "="))
+  "The Org marker of each formatting flag of a span.")
+
+(defun wolfram-nb--span-flags (options)
+  "Return the formatting flags, among ?b ?i ?u ?c, of the StyleBox OPTIONS.
+OPTIONS are the arguments after the text, as strings.  Every form the Front
+End writes is read: the directives Bold, Italic and Underlined, FontWeight,
+FontSlant, FontVariations and FontFamily, and the style names earlier
+versions wrote."
+  (let ((flags '()))
+    (dolist (option options)
+      (let ((text (replace-regexp-in-string "[ \t\n]+" "" option)))
+        (cond
+         ((string-prefix-p "{" text)
+          (setq flags (append flags
+                              (wolfram-nb--span-flags
+                               (wolfram-nb--split-args (substring text 1 (1- (length text))))))))
+         ((string-match-p "\\`\\(?:\"?Bold\"?\\|FontWeight->\"?\\(?:Bold\\|SemiBold\\)\"?\\)\\'" text)
+          (push ?b flags))
+         ((string-match-p "\\`\\(?:\"?Italic\"?\\|FontSlant->\"?\\(?:Italic\\|Oblique\\)\"?\\)\\'" text)
+          (push ?i flags))
+         ((or (string-match-p "\\`\"?Underlined\"?\\'" text)
+              (string-match-p "\\`FontVariations->.*\"Underline\"->True" text))
+          (push ?u flags))
+         ((string-match-p "\\`\\(?:\"Courier\"\\|FontFamily->\"\\(?:Courier\\|CourierNew\\|CourierStd\\)\"\\)\\'" text)
+          (push ?c flags)))))
+    (cl-remove-duplicates (sort flags #'<))))
+
+(defun wolfram-nb--span-key (flags text)
+  "Return the key of the span with FLAGS (characters) and plain TEXT."
+  (concat (apply #'string flags) "\0" text))
+
+(defvar wolfram-nb--parse-spans nil
+  "While a notebook is parsed, the hash table collecting its styled spans.")
+
+(defun wolfram-nb--remember-span (flags text part)
+  "Remember that the span with FLAGS and TEXT was written as the StyleBox PART."
+  (let ((table (or wolfram-nb--parse-spans
+                   (progn (unless wolfram-nb--span-sources
+                            (setq wolfram-nb--span-sources (make-hash-table :test 'equal)))
+                          wolfram-nb--span-sources))))
+    (puthash (wolfram-nb--span-key flags text) part table)))
+
+(defvar wolfram-nb--parse-cell-spans nil
+  "While a TextData cell is parsed, (TEXT . STYLEBOX) of its unflagged spans.
+These are spans whose formatting is not bold, italic, underline or code: a
+colour, a size.  Org shows them as plain text.")
+
+(defun wolfram-nb--remember-cell-spans (options spans)
+  "Remember SPANS, the unflagged spans of the cell with OPTIONS, by its UUID."
+  (let ((uuid (wolfram-nb--cell-uuid options)))
+    (unless (or (string-empty-p uuid) (null spans))
+      (let ((table (or wolfram-nb--parse-spans
+                       (progn (unless wolfram-nb--span-sources
+                                (setq wolfram-nb--span-sources (make-hash-table :test 'equal)))
+                              wolfram-nb--span-sources))))
+        (puthash (concat "cell\0" uuid) (reverse spans) table)))))
+
+(defun wolfram-nb--cell-spans (options)
+  "Return the unflagged spans remembered for the cell with OPTIONS, or nil."
+  (let ((uuid (wolfram-nb--cell-uuid options)))
+    (and wolfram-nb--span-sources (not (string-empty-p uuid))
+         (gethash (concat "cell\0" uuid) wolfram-nb--span-sources))))
+
+(defun wolfram-nb--split-literal (literal text)
+  "Split the string LITERAL, as written, around the first TEXT in it.
+Return (BEFORE AFTER), each a literal or an empty string, or nil if TEXT is
+not in LITERAL.  TEXT must stand on its own: `red' is not in `Colored'."
+  (let* ((raw (wolfram-nb--unescape-string (substring literal 1 -1)))
+         (at 0)
+         (found nil))
+    (while (and (not found) (setq at (string-search text raw at)))
+      (let ((before (and (> at 0) (aref raw (1- at))))
+            (after (and (< (+ at (length text)) (length raw))
+                        (aref raw (+ at (length text))))))
+        (if (and (or (null before) (not (eq (char-syntax before) ?w))
+                     (not (eq (char-syntax (aref text 0)) ?w)))
+                 (or (null after) (not (eq (char-syntax after) ?w))
+                     (not (eq (char-syntax (aref text (1- (length text)))) ?w))))
+            (setq found at)
+          (setq at (1+ at)))))
+    (when found
+      (cl-flet ((lit (s) (if (string-empty-p s) ""
+                           (format "\"%s\"" (wolfram-nb--escape-string s)))))
+        (list (lit (substring raw 0 found))
+              (lit (substring raw (+ found (length text)))))))))
+
+(defun wolfram-nb--reapply-spans (content spans)
+  "Return CONTENT with the formatted SPANS put back where their text still is.
+CONTENT is a string literal or a TextData[{...}]; SPANS are (TEXT . STYLEBOX) in
+the order they were read.  A span whose text was edited is not put back."
+  ;; a span already in CONTENT, as in a cell written back as it was read, stays
+  (let* ((spans (cl-remove-if (lambda (span) (string-search (cdr span) content)) spans))
+         (parts (and spans
+                     (cond
+                      ((string-prefix-p "\"" content) (list content))
+                      ((string-prefix-p "TextData[{" content)
+                       (wolfram-nb--split-args (substring content (length "TextData[{") -2))))))
+         (applied nil))
+    (when parts
+      (let ((done '()) (rest parts))
+        (dolist (span spans)
+          (let ((hit nil) (saved-done done) (saved-rest rest))
+            (while (and rest (not hit))
+              (let* ((part (car rest))
+                     (split (and (string-prefix-p "\"" part)
+                                 (wolfram-nb--split-literal part (car span)))))
+                (if split
+                    (progn (setq hit t applied t)
+                           (unless (string-empty-p (car split)) (push (car split) done))
+                           (push (cdr span) done)
+                           (setq rest (if (string-empty-p (cadr split))
+                                          (cdr rest)
+                                        (cons (cadr split) (cdr rest)))))
+                  (push part done)
+                  (setq rest (cdr rest)))))
+            ;; a span whose text was edited does not hold up the ones after it
+            (unless hit
+              (setq done saved-done rest saved-rest))))
+        (when applied
+          (format "TextData[{%s}]"
+                  (string-join (append (nreverse done) rest) ", ")))))))
+
+(defun wolfram-nb--span-source (flag text)
+  "Return the StyleBox the span with FLAG and plain TEXT was read from, or nil."
+  (and wolfram-nb--span-sources
+       (gethash (wolfram-nb--span-key (list flag) text) wolfram-nb--span-sources)))
+
 (defun wolfram-nb--parse-textdata-content (content)
   "Parse TextData CONTENT (a string inside TextData[{...}] or TextData[...]).
 Handles StyleBox for Bold/Italic formatting."
@@ -629,19 +764,30 @@ Handles StyleBox for Bold/Italic formatting."
                                      (string-prefix-p "{" text))))
                   ;; Not text inside: keep the whole box as it is.
                   (add (wolfram-nb--opaque-token part))
-                (let ((clean-text (if (string-prefix-p "{" text)
-                                      (wolfram-nb--parse-textdata-content text)
-                                    (wolfram-nb--unescape-string (substring text 1 -1) t))))
-                  (cond
-                   ((string-match-p "\"Bold\"" style-part)
-                    (add (wolfram-nb--styled-text "*" clean-text) t))
-                   ((string-match-p "\"Italic\"" style-part)
-                    (add (wolfram-nb--styled-text "/" clean-text) t))
-                   ((string-match-p "\"Underlined\"" style-part)
-                    (add (wolfram-nb--styled-text "_" clean-text) t))
-                   ((string-match-p "\"Courier\"" style-part)
-                    (add (wolfram-nb--styled-text "=" clean-text) t))
-                   (t (add clean-text)))))))
+                (let* ((clean-text (if (string-prefix-p "{" text)
+                                       (wolfram-nb--parse-textdata-content text)
+                                     (wolfram-nb--unescape-string (substring text 1 -1) t)))
+                       (args (wolfram-nb--split-args
+                              (substring part (length "StyleBox[") (1- (length part)))))
+                       (flags (wolfram-nb--span-flags (cdr args))))
+                  (ignore style-part)
+                  (if (null flags)
+                      (progn
+                        (when (and (string-prefix-p "\"" text) (not (string-empty-p clean-text)))
+                          (push (cons clean-text part) wolfram-nb--parse-cell-spans))
+                        (add clean-text))
+                    ;; options Org cannot show are kept while the text is as it was
+                    (when (and (string-prefix-p "\"" text)
+                               (cl-some (lambda (option)
+                                          (null (wolfram-nb--span-flags (list option))))
+                                        (cdr args)))
+                      (wolfram-nb--remember-span flags clean-text part))
+                    ;; the first flag is the outermost span
+                    (dolist (flag (reverse flags))
+                      (setq clean-text (wolfram-nb--styled-text
+                                        (cdr (assq flag wolfram-nb--span-markers))
+                                        clean-text)))
+                    (add clean-text t))))))
            ;; Any other inline box (a link, an inline cell, ...): keep it as it is
            (t (add (wolfram-nb--opaque-token part))))))
       result)))
@@ -1075,8 +1221,10 @@ Returns a `wolfram-nb-cell' struct, or nil for CellGroupData/unparseable."
              (raw-options (wolfram-nb--extract-cell-options cell-string style-end)))
         ;; Unwrap TextData[...] to get its argument
         (let* ((textdata-content (wolfram-nb--extract-head-argument textdata-wrapper "TextData"))
+               (wolfram-nb--parse-cell-spans nil)
                (content (wolfram-nb--parse-textdata-content textdata-content))
                (options nil))
+          (wolfram-nb--remember-cell-spans raw-options wolfram-nb--parse-cell-spans)
           (when (string-match "CellLabel->\"\\([^\"]*\\)\"" cell-string)
             (push (cons 'cell-label (match-string 1 cell-string)) options))
           (wolfram-nb-cell-create
@@ -1340,9 +1488,13 @@ When called from a `wolfram-nb-mode' buffer, also sets
   (let* ((calling-buffer (current-buffer))
          (wolfram-nb--parse-opaque
           (or (buffer-local-value 'wolfram-nb--opaque-parts calling-buffer)
+              (make-hash-table :test 'equal)))
+         (wolfram-nb--parse-spans
+          (or (buffer-local-value 'wolfram-nb--span-sources calling-buffer)
               (make-hash-table :test 'equal))))
     (with-current-buffer calling-buffer
-      (setq wolfram-nb--opaque-parts wolfram-nb--parse-opaque))
+      (setq wolfram-nb--opaque-parts wolfram-nb--parse-opaque
+            wolfram-nb--span-sources wolfram-nb--parse-spans))
     (let ((wolfram-nb--parse-groups (make-hash-table))
           (wolfram-nb--parse-group-count 0)
           (wolfram-nb--parse-count 0)
@@ -1476,22 +1628,27 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
               ;; Code or verbatim elements
               ((memq type '(code verbatim))
                (let ((val (org-element-property :value el)))
-                 (cons (list (format "StyleBox[%s, \"Courier\"]"
-                                     (wolfram-nb--span-content
-                                      (car (wolfram-nb--string-parts val t)))))
+                 (cons (list (or (wolfram-nb--span-source ?c val)
+                                 (format "StyleBox[%s, FontFamily->\"Courier\"]"
+                                         (wolfram-nb--span-content
+                                          (car (wolfram-nb--string-parts val t))))))
                        t)))
               
               ;; Bold, Italic, Underline elements
               (is-inline-rich
-               (let* ((style (cond ((eq type 'bold) "Bold")
-                                   ((eq type 'italic) "Italic")
-                                   ((eq type 'underline) "Underlined")))
+               ;; the forms the Front End itself writes
+               (let* ((style (cond ((eq type 'bold) "FontWeight->Bold")
+                                   ((eq type 'italic) "FontSlant->Italic")
+                                   ((eq type 'underline) "FontVariations->{\"Underline\"->True}")))
+                      (flag (cond ((eq type 'bold) ?b) ((eq type 'italic) ?i) (t ?u)))
                       (inner-parts '()))
                  (dolist (c contents)
                    (let ((res (wolfram-nb--org-element-to-textdata c t)))
                      (setq inner-parts (append inner-parts (car res)))))
-                 (cons (list (format "StyleBox[%s, \"%s\"]"
-                                     (wolfram-nb--span-content inner-parts) style))
+                 (cons (list (or (and (= (length contents) 1) (stringp (car contents))
+                                      (wolfram-nb--span-source flag (car contents)))
+                                 (format "StyleBox[%s, %s]"
+                                         (wolfram-nb--span-content inner-parts) style)))
                        t)))
               
               ;; Objects Org knows but this converter does not style (subscripts,
@@ -2060,7 +2217,11 @@ it is inserted as-is without extra quotes/escaping."
                  (string-match-p wolfram-nb--opaque-regexp trimmed))
             (format "TextData[{%s}]"
                     (string-join (car (wolfram-nb--string-parts trimmed t)) ", ")))
-           (t (concat "\"" (wolfram-nb--escape-string trimmed) "\"")))))
+           (t (concat "\"" (wolfram-nb--escape-string trimmed) "\""))))
+         (spans (and raw-options (not literal) (wolfram-nb--cell-spans raw-options))))
+    (when spans
+      (setq final-content (or (wolfram-nb--reapply-spans final-content spans)
+                              final-content)))
     (if raw-options
         (format "Cell[%s, \"%s\", %s]"
                 final-content
@@ -2074,13 +2235,15 @@ it is inserted as-is without extra quotes/escaping."
   "Parse ORG-TEXT and convert to a list of Cell string representations."
   (let ((cache wolfram-nb--large-cells-cache)
         (sources wolfram-nb--box-sources)
-        (opaque wolfram-nb--opaque-parts))
+        (opaque wolfram-nb--opaque-parts)
+        (spans wolfram-nb--span-sources))
     (with-temp-buffer
       (insert org-text)
       (org-mode)
       (setq-local wolfram-nb--large-cells-cache cache)
       (setq-local wolfram-nb--box-sources sources)
       (setq-local wolfram-nb--opaque-parts opaque)
+      (setq-local wolfram-nb--span-sources spans)
       (let ((tree (org-element-parse-buffer))
             (cells '())
             (wolfram-nb--box-counts (make-hash-table :test 'equal)))
@@ -2519,6 +2682,7 @@ or Evil's `:w'."
     (setq wolfram-nb--large-cells-cache nil
           wolfram-nb--box-sources nil
           wolfram-nb--opaque-parts nil
+          wolfram-nb--span-sources nil
           wolfram-nb--notebook-options nil
           wolfram-nb--group-info nil
           wolfram-nb--group-chains nil

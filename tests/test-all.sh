@@ -98,6 +98,7 @@ run_test_file "Highlighting tests" "test-faces.el"
 run_test_file "Workflow tests" "test-workflow.el"
 run_test_file "Cell group tests" "test-groups.el"
 run_test_file "Verbatim cell tests" "test-verbatim.el"
+run_test_file "Inline style tests" "test-styles.el"
 
 echo ""
 echo "12. Byte-compilation"

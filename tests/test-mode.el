@@ -664,7 +664,7 @@ Ensures that even with complex options, TextData content is extracted cleanly."
     (should (string-match-p "TextData" (car cells)))
     (should (string-match-p "StyleBox.*Bold" (car cells)))
     (should (string-match-p "StyleBox.*Italic" (car cells)))
-    (should (string-match-p "StyleBox.*Underlined" (car cells)))
+    (should (string-match-p "StyleBox.*Underline" (car cells)))
     (should (string-match-p "StyleBox.*Courier" (car cells))))
   ;; Cell -> Org
   (let* ((cell (wolfram-nb--parse-cell "Cell[TextData[{\"Plain \", StyleBox[\"bold\", \"Bold\"], \" and \", StyleBox[\"italic\", \"Italic\"], \" and \", StyleBox[\"under\", \"Underlined\"], \" and \", StyleBox[\"code\", \"Courier\"], \".\"}], \"Text\"]"))
