@@ -120,6 +120,17 @@
                          (sleep-for 0.3))
                   :type 'error)))
 
+(ert-deftest wolfram-nb-kernel-test-missing-program-is-reported-before-starting ()
+  "Starting does not rely on Emacs to notice a program that is not there.
+Emacs 29 signals an error for it from `make-process'; Emacs 28.2 starts the
+process and reports an exit status afterwards."
+  (let ((wolfram-nb-kernel-command '("/nonexistent/WolframKernel"))
+        (called nil))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest _) (setq called t) (error "No such file"))))
+      (should-error (wolfram-nb-kernel-start) :type 'wolfram-nb-kernel-error))
+    (should-not called)))
+
 ;;; Detaching
 
 (ert-deftest wolfram-nb-kernel-test-detached-command ()

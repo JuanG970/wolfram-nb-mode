@@ -429,6 +429,11 @@ when no kernel executable can be found."
     (unless command
       (signal 'wolfram-nb-kernel-error
               '("No WolframKernel found; set `wolfram-nb-kernel-program' or `wolfram-nb-kernel-command'")))
+    ;; Emacs 29 signals a program that is not there from `make-process'; Emacs
+    ;; 28.2 starts it and reports an exit status afterwards.
+    (unless (executable-find (car command))
+      (signal 'wolfram-nb-kernel-error
+              (list (format "Cannot run %s: no such executable" (car command)))))
     (let* ((boot-line (wolfram-nb-kernel--boot-line))
            (kernel (wolfram-nb-kernel--make :command command))
            (stderr (generate-new-buffer " *wolfram-nb-kernel-stderr*"))

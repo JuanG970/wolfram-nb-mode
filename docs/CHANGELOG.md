@@ -224,6 +224,9 @@ mode and having the kernel compare the original with the saved file:
 - `tests/real/` runs every notebook of a list through the mode and has the kernel judge
   the saved copy; the Wolfram Engine's own 1,030 notebooks are the corpus, and
   all of them come back with the same cells, groups and options
+- Starting a kernel whose program is not there signals `wolfram-nb-kernel-error`
+  on every Emacs; Emacs 28.2 (the CI version) starts such a process and reports
+  an exit status later, which the first run of the suite on 28.2 showed
 - A cell group whose state is an expression over several lines (`Dynamic[...]`)
   keeps it; it was read as `Open`
 - Dropping a repeated `ExpressionUUID` from the middle of a cell's options keeps
