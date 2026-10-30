@@ -122,6 +122,27 @@ the Open or Closed of each group.  Groups are numbered as they are met."
 
 ;;; Round trip
 
+(defconst wolfram-nb-groups--dynamic-notebook
+  (concat "Notebook[{\n"
+          "Cell[CellGroupData[{\n"
+          "Cell[\"Intro\", \"Section\"],\n"
+          "Cell[\"intro text\", \"Text\"]}, Dynamic[\n"
+          "  If[CurrentValue[\"Open\"], 1, 2]]]],\n"
+          "Cell[\"after\", \"Text\"]\n"
+          "}]\n")
+  "A notebook whose group is open or closed as a Dynamic expression says.")
+
+(ert-deftest wolfram-nb-groups-test-a-state-that-spans-lines-is-kept ()
+  "The Dynamic state of a group, which the Front End writes over lines, stays."
+  (let ((state "Dynamic[\n  If[CurrentValue[\"Open\"], 1, 2]]"))
+    (should (equal (wolfram-nb-groups--shape wolfram-nb-groups--dynamic-notebook)
+                   (cons '(("Section" 1) ("Text" 1) ("Text"))
+                         (list (cons 1 state)))))
+    (wolfram-nb-groups--with-notebook wolfram-nb-groups--dynamic-notebook file
+      (should (equal (wolfram-nb-groups--save-after #'ignore file)
+                     (cons '(("Section" 1) ("Text" 1) ("Text"))
+                           (list (cons 1 state))))))))
+
 (ert-deftest wolfram-nb-groups-test-unedited-notebook-keeps-its-groups ()
   (wolfram-nb-groups--with-notebook wolfram-nb-groups--notebook file
     (should (equal (wolfram-nb-groups--save-after #'ignore file)

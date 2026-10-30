@@ -242,6 +242,27 @@
     (should (= (length (split-string text "same-id")) 2))
     (should (= (length (split-string text "Cell\\[")) 3))))
 
+(ert-deftest wolfram-nb-edge-test-a-repeated-identifier-leaves-the-other-options ()
+  "Dropping a repeated ExpressionUUID keeps the commas between the options."
+  (let ((seen (make-hash-table :test 'equal))
+        (cell "Cell[\"a\", \"Text\", ExpressionUUID->\"u2\", CellTags->\"t\"]"))
+    (should (equal (wolfram-nb--drop-repeated-uuid cell seen) cell))
+    (should (equal (wolfram-nb--drop-repeated-uuid cell seen)
+                   "Cell[\"a\", \"Text\", CellTags->\"t\"]"))))
+
+(ert-deftest wolfram-nb-edge-test-a-symbol-in-another-context-is-not-the-identifier ()
+  "`$CellContext`ExpressionUUID' is another symbol; only ExpressionUUID is the identifier."
+  (let ((seen (make-hash-table :test 'equal))
+        (cell (concat "Cell[\"a\", \"InlineFormula\", $CellContext`ExpressionUUID -> \"u1\", "
+                      "ExpressionUUID -> \"u2\"]")))
+    (should (equal (wolfram-nb--cell-uuid
+                    (wolfram-nb--extract-cell-options
+                     cell (cdr (wolfram-nb--cell-style-info cell))))
+                   "u2"))
+    (should (equal (wolfram-nb--drop-repeated-uuid cell seen) cell))
+    (should (equal (wolfram-nb--drop-repeated-uuid cell seen)
+                   "Cell[\"a\", \"InlineFormula\", $CellContext`ExpressionUUID -> \"u1\"]"))))
+
 (ert-deftest wolfram-nb-edge-test-deleting-and-moving-cells-in-org ()
   (with-temp-buffer
     (wolfram-nb-mode)

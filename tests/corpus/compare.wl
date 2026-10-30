@@ -44,6 +44,12 @@ codeOf[Cell[b_BoxData, ___]] := normalizeHold @ Quiet @ ToExpression[b, Standard
 codeOf[Cell[s_String, ___]] := normalizeHold @ Quiet @ ToExpression[s, InputForm, Hold]
 codeOf[_] := $Failed
 
+(* Code that does not parse (a cell that shows broken code on purpose) cannot be
+   compared as an expression; it is the same when the cell is the same. *)
+sameCode[a_, b_] :=
+    With[{ca = codeOf[a], cb = codeOf[b]},
+        If [ca === $Failed, a === b, ca === cb]]
+
 (* The nesting of cell groups, with each group's Open/Closed state, and the
    styles of the cells: what the cell brackets of the Front End show.  A group
    with no cell shows nothing, so it is left out. *)
@@ -101,7 +107,7 @@ compare[original_String, saved_String] :=
                 "gfx=" <> ratio[Count[g, i_ /; fo[[i]] === fs[[i]]], Length[g]],
                 "text=" <> ratio[Count[t, i_ /; textOf[fo[[i]]] === textOf[fs[[i]]]], Length[t]],
                 "styled=" <> ratio[Count[t, i_ /; styledOf[fo[[i]]] === styledOf[fs[[i]]]], Length[t]],
-                "code=" <> ratio[Count[c, i_ /; codeOf[fo[[i]]] === codeOf[fs[[i]]] && codeOf[fo[[i]]] =!= $Failed], Length[c]],
+                "code=" <> ratio[Count[c, i_ /; sameCode[fo[[i]], fs[[i]]]], Length[c]],
                 "opts=" <> ratio[Count[op, i_ /; Drop[List @@ fo[[i]], 2] === Drop[List @@ fs[[i]], 2]], Length[op]]
             },
             ";"

@@ -1466,8 +1466,11 @@ in the cell, usually nothing."
                (cgd-end (wolfram-nb--sexp-end bracket)))
           (when (and list-end cgd-end)
             (let ((raw (string-trim (buffer-substring-no-properties list-end (1- cgd-end)))))
-              (when (string-match "\\`,[ \t\n]*\\(.+\\)\\'" raw)
-                (setq state (match-string 1 raw))))
+              ;; the state can be an expression over several lines (Dynamic[...])
+              (when (string-prefix-p "," raw)
+                (let ((given (string-trim (substring raw 1))))
+                  (unless (string-empty-p given)
+                    (setq state given)))))
             (let ((rest (string-trim
                          (buffer-substring-no-properties cgd-end (max cgd-end (1- (point-max)))))))
               (setq outer rest)))))
@@ -1750,13 +1753,30 @@ RICH-CONTEXT is non-nil if we are inside a rich-text element (e.g. bold)."
                       rich))
             res-cons)))))))
 
+(defun wolfram-nb--uuid-option (opts)
+  "Return (START END UUID) of the ExpressionUUID option in the options OPTS.
+START and END cover the option, from its name to its closing quote.  A symbol
+of another context, such as $CellContext`ExpressionUUID, is not the option."
+  (let ((pos 0) (found nil))
+    (while (and (not found)
+                (string-match "ExpressionUUID[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"" opts pos))
+      (let ((start (match-beginning 0))
+            (end (match-end 0))
+            (uuid (match-string 1 opts)))
+        (if (and (> start 0)
+                 (string-match-p "[`$[:alnum:]]" (substring opts (1- start) start)))
+            (setq pos end)
+          (setq found (list start end uuid)))))
+    found))
+
 (defun wolfram-nb--cell-uuid (opts)
   "Return the ExpressionUUID in the cell options OPTS, or an empty string.
 The Front End wraps a long string with a backslash and a newline, which adds
 no character; the identifier is returned without them."
-  (if (and opts (string-match "ExpressionUUID[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"" opts))
-      (replace-regexp-in-string "\\\\\n[ \t]*" "" (match-string 1 opts))
-    ""))
+  (let ((option (and opts (wolfram-nb--uuid-option opts))))
+    (if option
+        (replace-regexp-in-string "\\\\\n[ \t]*" "" (nth 2 option))
+      "")))
 
 (defun wolfram-nb--optionless-style-p (style)
   "Return non-nil if cells of STYLE cannot carry an attribute line in Org."
@@ -2524,16 +2544,28 @@ cell to have its own."
   (let ((info (wolfram-nb--cell-style-info cell)))
     (if (not info)
         cell
-      (let* ((options (substring cell (cdr info))))
-        (if (not (string-match
-                  "\\(,[ \t\n]*\\)?ExpressionUUID[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"\\(?:[ \t\n]*,\\)?"
-                  options))
-            cell
-          (let ((uuid (match-string 2 options)))
-            (if (not (gethash uuid seen))
-                (progn (puthash uuid t seen) cell)
-              (concat (substring cell 0 (cdr info))
-                      (replace-match "" t t options)))))))))
+      (let* ((options (substring cell (cdr info)))
+             (option (wolfram-nb--uuid-option options)))
+        (cond
+         ((not option) cell)
+         ((not (gethash (nth 2 option) seen))
+          (puthash (nth 2 option) t seen)
+          cell)
+         (t
+          ;; the option goes with the comma that separates it from the one
+          ;; before, or from the one after when it is the first
+          (let* ((start (nth 0 option))
+                 (end (nth 1 option))
+                 (before start))
+            (while (and (> before 0)
+                        (memq (aref options (1- before)) '(?\s ?\t ?\n)))
+              (setq before (1- before)))
+            (concat (substring cell 0 (cdr info))
+                    (if (and (> before 0) (eq (aref options (1- before)) ?,))
+                        (concat (substring options 0 (1- before)) (substring options end))
+                      (concat (substring options 0 start)
+                              (replace-regexp-in-string
+                               "\\`[ \t\n]*,?[ \t\n]*" "" (substring options end))))))))))))
 
 (defconst wolfram-nb--grouping-levels
   '(("Title" . 0) ("Subtitle" . 10) ("Subsubtitle" . 20)
