@@ -106,6 +106,20 @@
   :type 'boolean
   :group 'wolfram-nb)
 
+(defcustom wolfram-nb-write-header t
+  "Whether a saved notebook starts with the header the Front End writes.
+The header is the Content-type and magic comments.  The Front End's cache
+information, whose byte offsets must be exact, is not written; the Front End
+rebuilds it when it saves the notebook."
+  :type 'boolean
+  :group 'wolfram-nb)
+
+(defconst wolfram-nb--file-header
+  (concat "(* Content-type: application/vnd.wolfram.mathematica *)\n\n"
+          "(*** Wolfram Notebook File ***)\n"
+          "(* http://www.wolfram.com/nb *)\n\n")
+  "The static lines a notebook file starts with.")
+
 (defcustom wolfram-nb-wolframscript-path "wolframscript"
   "Path to the wolframscript executable."
   :type 'string
@@ -2746,7 +2760,10 @@ Returns t for `write-contents-functions', so `save-buffer' (and with it
     (let* ((org-text (buffer-substring-no-properties (point-min) (point-max)))
            (cells (wolfram-nb--org-to-cells org-text))
            (notebook-text (wolfram-nb--cells-to-notebook cells)))
-      (wolfram-nb--write-file-atomically file notebook-text)
+      (wolfram-nb--write-file-atomically
+       file (if wolfram-nb-write-header
+                (concat wolfram-nb--file-header notebook-text)
+              notebook-text))
       (setq wolfram-nb--cells nil
             wolfram-nb--original-file (expand-file-name file)
             wolfram-nb--cell-count (length cells))

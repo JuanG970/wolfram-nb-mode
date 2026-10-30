@@ -138,7 +138,7 @@ up afterwards; a kernel of the buffer's own is stopped with it."
     ;; Save and look at the file.
     (wolfram-nb-save)
     (let ((saved (with-temp-buffer (insert-file-contents file) (buffer-string))))
-      (should (string-prefix-p "Notebook[{" saved))
+      (should (string-match-p "^Notebook\\[{" saved))
       (should (string-match-p "Cell\\[BoxData\\[GraphicsBox\\[" saved))
       (should (string-match-p "\"Output\"" saved))
       (should-not (string-match-p "Cell\\[\"GraphicsBox" saved)))

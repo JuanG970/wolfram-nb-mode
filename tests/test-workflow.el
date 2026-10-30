@@ -176,6 +176,30 @@ Buffers visiting the directory's files are discarded afterwards."
             (should (string-match-p "written with :w" (wolfram-nb-workflow--text file))))
         (evil-mode -1)))))
 
+(ert-deftest wolfram-nb-workflow-test-saved-file-starts-with-the-front-ends-header ()
+  (wolfram-nb-workflow--with-copy file
+    (with-current-buffer (find-file-noselect file)
+      (set-buffer-modified-p t)
+      (save-buffer)
+      (let ((text (wolfram-nb-workflow--text file)))
+        (should (string-prefix-p "(* Content-type: application/vnd.wolfram.mathematica *)\n" text))
+        (should (string-match-p "^(\\*\\*\\* Wolfram Notebook File \\*\\*\\*)$" text))
+        (should (string-match-p "^Notebook\\[{$" text))
+        ;; opens again as the same cells, and saves again as the same file
+        (revert-buffer t t)
+        (should (wolfram-nb-workflow--org-p))
+        (set-buffer-modified-p t)
+        (save-buffer)
+        (should (equal text (wolfram-nb-workflow--text file)))))))
+
+(ert-deftest wolfram-nb-workflow-test-header-can-be-turned-off ()
+  (wolfram-nb-workflow--with-copy file
+    (let ((wolfram-nb-write-header nil))
+      (with-current-buffer (find-file-noselect file)
+        (set-buffer-modified-p t)
+        (save-buffer)
+        (should (string-prefix-p "Notebook[{" (wolfram-nb-workflow--text file)))))))
+
 ;;; Reverting and re-running the mode
 
 (ert-deftest wolfram-nb-workflow-test-revert-reads-the-file-again ()
