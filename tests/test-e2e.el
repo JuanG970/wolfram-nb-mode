@@ -297,6 +297,25 @@ up afterwards; a kernel of the buffer's own is stopped with it."
         (should (equal (saved "Cases[Get[%s], Cell[CellGroupData[l_, ___], ___] :> Length[l], Infinity]")
                        "{4, 2}"))))))
 
+(defconst wolfram-nb-e2e--dynamic-notebook
+  (concat "Notebook[{\n"
+          "Cell[\"Manipulate[Plot[a Sin[x], {x, 0, 6}], {a, 1, 3}]\", \"Input\"],\n"
+          "Cell[\"Table[i, {i, 40000}]\", \"Input\"]\n}]\n")
+  "A notebook with a Manipulate and a table too large to keep as boxes.")
+
+(ert-deftest wolfram-nb-e2e-test-a-manipulate-stays-dynamic-and-a-huge-table-does-not ()
+  (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--dynamic-notebook
+    (wolfram-nb-eval-buffer)
+    (wolfram-nb-save)
+    (let ((lit (format "%S" file)))
+      (cl-flet ((saved (expr) (wolfram-nb-e2e--kernel-eval (format expr lit))))
+        ;; the Manipulate is a real DynamicModuleBox, so it works in the Front End
+        (should (equal (saved "Cases[Get[%s], Cell[BoxData[b_], \"Output\", ___] :> !FreeQ[b, DynamicModuleBox], Infinity]")
+                       "{True}"))
+        ;; the table has no boxes worth keeping: a string
+        (should (equal (saved "Length[Cases[Get[%s], Cell[_String, \"Output\", ___], Infinity]]")
+                       "1"))))))
+
 (ert-deftest wolfram-nb-e2e-test-huge-output-is-kept-small ()
   (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--notebook
     (ignore file)
