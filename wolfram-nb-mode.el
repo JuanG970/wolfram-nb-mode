@@ -1870,7 +1870,7 @@ For plain strings, whose asterisks and slashes are not formatting."
                   (org-escape-code-in-string content))))
        
        ;; Example Blocks
-       ((or (string= style "Output") (string= style "Print"))
+       ((member style '("Output" "Print" "Message" "Echo"))
         (let ((label (cdr (assoc 'cell-label (wolfram-nb-cell-options cell)))))
           (format "%s%s#+begin_example\n%s\n#+end_example\n\n"
                   (if label (format "#+NAME: %s\n" label) "")
@@ -3001,12 +3001,15 @@ Emacs slows down on very long lines; the rest of such a line is left out."
               (substring text 0 wolfram-nb-max-output-length)
               wolfram-nb-max-output-length (length text)))))
 
-(defun wolfram-nb--insert-example (text &optional label)
+(defun wolfram-nb--insert-example (text &optional label style options)
   "Insert TEXT as an example block at point and return its (START . END).
-With LABEL the block starts a result: a #+RESULTS: line goes before it."
+With LABEL the block starts a result: a #+RESULTS: line goes before it.  STYLE
+and OPTIONS are those of the cell the block becomes; the default is an Output
+cell without options."
   (setq text (wolfram-nb--limit-output text))
   (wolfram-nb--prepare-insertion)
   (when label (insert "#+RESULTS:\n"))
+  (insert (wolfram-nb--attr-line (or style "Output") "Output" options))
   (let ((start (point)))
     (insert "#+begin_example\n" (org-escape-code-in-string text)
             "\n#+end_example\n\n")
@@ -3032,31 +3035,59 @@ of the inserted block."
         (wolfram-nb--set-overlay-image ov png))
       (cons start (point)))))
 
+(defun wolfram-nb--new-uuid ()
+  "Return a new random identifier of the form the Front End uses for cells."
+  (format "%04x%04x-%04x-4%03x-%04x-%04x%04x%04x"
+          (random #x10000) (random #x10000) (random #x10000) (random #x1000)
+          (+ #x8000 (random #x4000)) (random #x10000) (random #x10000) (random #x10000)))
+
+(defun wolfram-nb--split-messages (text)
+  "Return the messages in TEXT, which the kernel printed, one string each."
+  (when (and text (not (string-empty-p (string-trim text))))
+    (let ((messages '()) (current nil))
+      (dolist (line (split-string (string-trim text) "\n"))
+        (if (and current
+                 (not (string-match-p
+                       "\\`[A-Za-z$][A-Za-z0-9$`]*::[A-Za-z0-9$]+:" line)))
+            (setq current (concat current "\n" line))
+          (when current (push current messages))
+          (setq current line)))
+      (when current (push current messages))
+      (nreverse messages))))
+
+(defun wolfram-nb--remember-result-boxes (options shown boxes)
+  "Remember BOXES for the Output cell with OPTIONS that is shown as SHOWN.
+The cell is written with them as long as its text is not edited."
+  (unless wolfram-nb--box-sources
+    (setq wolfram-nb--box-sources (make-hash-table :test 'equal)))
+  (puthash (wolfram-nb--source-key "Output" options shown)
+           (cons (format "BoxData[%s]" boxes) options)
+           wolfram-nb--box-sources))
+
 (defun wolfram-nb--apply-eval-result (position result code)
   "Replace the results after POSITION by the evaluation RESULT of CODE.
 POSITION is where the evaluated source block ends.  Like org-babel, the
-new result goes under a #+RESULTS: line and takes the place of the old one.
-Return non-nil."
+results go under a #+RESULTS: line and take the place of the old ones.  As
+the Front End does, what was printed, each message and the value are cells of
+their own: Print, Message and Output.  Return non-nil."
   (save-excursion
-    (let ((inhibit-read-only t)
-          (png (plist-get result :png))
-          (boxes (plist-get result :boxes))
-          (text (wolfram-nb--result-text result))
-          (label t))
+    (let* ((inhibit-read-only t)
+           (png (plist-get result :png))
+           (boxes (plist-get result :boxes))
+           (printed (string-trim (or (plist-get result :stdout) "")))
+           (messages (wolfram-nb--split-messages (plist-get result :messages)))
+           (value (string-trim (or (plist-get result :result) "")))
+           (label t))
       (cl-flet ((next-label () (prog1 label (setq label nil))))
         (goto-char position)
         (wolfram-nb--delete-results position)
         (wolfram-nb--prune-overlays)
+        (unless (string-empty-p printed)
+          (wolfram-nb--insert-example printed (next-label) "Print"))
+        (dolist (message messages)
+          (wolfram-nb--insert-example message (next-label) "Message" "\"MSG\""))
         (cond
          ((and png boxes)
-          (let ((printed (string-join
-                          (cl-remove-if #'string-empty-p
-                                        (mapcar (lambda (key)
-                                                  (string-trim (or (plist-get result key) "")))
-                                                '(:stdout :messages)))
-                          "\n")))
-            (unless (string-empty-p printed)
-              (wolfram-nb--insert-example printed (next-label))))
           (wolfram-nb--insert-graphics-output boxes png (next-label)))
          (png
           (let ((region (wolfram-nb--insert-example
@@ -3067,11 +3098,16 @@ Return non-nil."
                          (next-label))))
             (wolfram-nb--render-evaluation-output
              (car region) (cdr region) png code)))
-         ((not (string-empty-p text))
-          (let ((region (wolfram-nb--insert-example
-                         (wolfram-nb--format-output text) (next-label))))
+         ((not (string-empty-p value))
+          (let* ((shown (wolfram-nb--format-output value))
+                 (options (and boxes
+                               (format "ExpressionUUID->\"%s\"" (wolfram-nb--new-uuid))))
+                 (region (wolfram-nb--insert-example shown (next-label) "Output" options)))
+            (when options
+              (wolfram-nb--remember-result-boxes
+               options (wolfram-nb--limit-output shown) boxes))
             (wolfram-nb--render-evaluation-output
-             (car region) (cdr region) text code)))))
+             (car region) (cdr region) value code)))))
       t)))
 
 ;;;; Evaluation — commands

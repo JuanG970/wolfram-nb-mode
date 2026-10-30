@@ -236,28 +236,59 @@ up afterwards; a kernel of the buffer's own is stopped with it."
   (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--nasty-notebook
     (wolfram-nb-eval-buffer)
     (let ((text (wolfram-nb-e2e--buffer-text)))
-      ;; Org still sees one example block, and the paragraph after it.
-      (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 1))
-      (should (= (wolfram-nb-e2e--count "^#\\+end_example") 1))
+      ;; Org still sees two example blocks, what was printed and the value,
+      ;; and the paragraph after them.
+      (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 2))
+      (should (= (wolfram-nb-e2e--count "^#\\+end_example") 2))
       (should (string-match-p "^After$" text)))
     ;; Evaluating again replaces the output instead of adding to it.
     (wolfram-nb-eval-buffer)
-    (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 1))
-    ;; The saved output holds the text exactly.
+    (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 2))
+    ;; The saved output holds the text exactly: a Print cell and an Output cell.
     (wolfram-nb-save)
     (let ((lit (format "%S" file)))
       (should (equal (wolfram-nb-e2e--kernel-eval
-                      (format "StringSplit[Cases[Get[%s], Cell[s_String, \"Output\", ___] :> s, Infinity][[1]], \"\\n\"]" lit))
-                     "{* looks like a headline, #+end_example, ,* comma, - not a list, [[x]] and *b*, last line}")))
+                      (format "StringSplit[Cases[Get[%s], Cell[s_String, \"Print\", ___] :> s, Infinity][[1]], \"\\n\"]" lit))
+                     "{* looks like a headline, #+end_example, ,* comma, - not a list, [[x]] and *b*}"))
+      (should (equal (wolfram-nb-e2e--kernel-eval
+                      (format "Cases[Get[%s], Cell[BoxData[b_], \"Output\", ___] :> ToExpression[b, StandardForm], Infinity]" lit))
+                     "{last line}")))
     ;; And it opens again as the same cells.
     (let ((again (progn (revert-buffer t t) (current-buffer))))
       (ignore again)
       (let ((reopened (current-buffer)))
         (unwind-protect
             (progn
-              (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 1))
+              (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 2))
               (should (string-match-p "^,#\\+end_example$" (wolfram-nb-e2e--buffer-text))))
           (kill-buffer reopened))))))
+
+(defconst wolfram-nb-e2e--results-notebook
+  (concat "Notebook[{\n"
+          "Cell[CellGroupData[{\n"
+          "Cell[\"Results\", \"Section\"],\n"
+          "Cell[\"f::bad = \\\"oops\\\"; Print[\\\"hi\\\"]; Message[f::bad]; 1/2 + x^2\", \"Input\"]\n"
+          "}, Open]]\n}]\n")
+  "A notebook whose input prints, sends a message and has a typeset value.")
+
+(ert-deftest wolfram-nb-e2e-test-results-are-print-message-and-typeset-output ()
+  (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--results-notebook
+    (wolfram-nb-eval-buffer)
+    (should (= (wolfram-nb-e2e--count "^#\\+RESULTS:") 1))
+    (should (= (wolfram-nb-e2e--count "^#\\+begin_example") 3))
+    (wolfram-nb-save)
+    (let ((lit (format "%S" file)))
+      (cl-flet ((saved (expr) (wolfram-nb-e2e--kernel-eval (format expr lit))))
+        (should (equal (saved "Cases[Get[%s], Cell[s_String, \"Print\", ___] :> s, Infinity]")
+                       "{hi}"))
+        (should (equal (saved "Cases[Get[%s], Cell[s_String, \"Message\", \"MSG\"] :> s, Infinity]")
+                       "{f::bad: oops}"))
+        ;; the value is typeset, as the Front End writes it, not a text picture
+        (should (equal (saved "Cases[Get[%s], Cell[BoxData[b_], \"Output\", ___] :> !FreeQ[b, FractionBox], Infinity]")
+                       "{True}"))
+        ;; the input and its results are one group, inside the section's
+        (should (equal (saved "Cases[Get[%s], Cell[CellGroupData[l_, ___], ___] :> Length[l], Infinity]")
+                       "{4, 2}"))))))
 
 (ert-deftest wolfram-nb-e2e-test-huge-output-is-kept-small ()
   (wolfram-nb-e2e--with-notebook file wolfram-nb-e2e--notebook

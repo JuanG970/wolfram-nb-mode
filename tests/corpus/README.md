@@ -25,6 +25,10 @@ results after them), a tab, and the nesting the Front End returned from
 groups made for new cells equal these, apart from consecutive `Print`, `Title`
 and `Subtitle` cells, which the Front End groups among themselves.
 
+`fe-reads.wls` asks the Front End itself whether it reads a notebook and the
+copy Emacs saved as the same cells and groups (run by hand, it needs a Front
+End). On `fe-grouped.nb` it says yes, options and labels included.
+
 `manifest.txt` has the true number of cells and notebook options of each
 file, written by the generator, so the tests do not depend on the parser they
 test. `compare.wl` loads two notebook files and compares them as Wolfram

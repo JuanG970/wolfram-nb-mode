@@ -109,8 +109,15 @@
     (wolfram-nb--apply-eval-result
      (point-max) '(:status "ok" :stdout "1" :messages "\nf::bad: oops" :result "2")
      "Print[1]; 2")
-    (should (string-match-p "begin_example\n1\nf::bad: oops\n2\n#\\+end_example"
-                            (buffer-string)))))
+    ;; what was printed, the message and the value are cells of their own
+    (should (string-match-p
+             (concat "#\\+RESULTS:\n#\\+ATTR_WOLFRAM: :style \"Print\"\n"
+                     "#\\+begin_example\n1\n#\\+end_example\n\n"
+                     "#\\+ATTR_WOLFRAM: :style \"Message\" :options \"\\\\\"MSG\\\\\"\"\n"
+                     "#\\+begin_example\nf::bad: oops\n#\\+end_example\n\n"
+                     "#\\+begin_example\n2\n#\\+end_example")
+             (buffer-string)))
+    (should (= (wolfram-nb-test--count "^#\\+RESULTS:$") 1))))
 
 (ert-deftest wolfram-nb-output-test-block-without-trailing-newline ()
   (wolfram-nb-test--in-buffer "#+begin_src wolfram\n2+2\n#+end_src"
@@ -149,10 +156,12 @@ Print[\"hi\"]; 7\n#+end_src\n\n"
     (wolfram-nb--apply-eval-result
      (save-excursion (re-search-forward "#\\+end_src\n\n") (point))
      '(:status "ok" :stdout "hi" :result "7") "Print[\"hi\"]; 7")
-    (should (= (wolfram-nb-test--count "begin_example") 1))
+    (should (= (wolfram-nb-test--count "begin_example") 2))
     (should (= (wolfram-nb-test--count "^#\\+RESULTS:$") 1))
-    (should-not (string-match-p "Out\\[2\\]=\\|:style \"Print\"" (buffer-string)))
-    (should (string-match-p "begin_example\nhi\n7\n#\\+end_example\n\nText after" (buffer-string)))))
+    (should-not (string-match-p "Out\\[2\\]=" (buffer-string)))
+    (should (string-match-p
+             "begin_example\nhi\n#\\+end_example\n\n#\\+begin_example\n7\n#\\+end_example\n\nText after"
+             (buffer-string)))))
 
 (ert-deftest wolfram-nb-output-test-reevaluation-replaces-an-unlabelled-block ()
   "A result without a #+RESULTS: line, as older buffers have, is replaced too."
@@ -227,6 +236,75 @@ old
                                     (match-string 1 c)))
                              back)
                      '("Input" "Print" "Output" "Text" "Output"))))))
+
+;;; Results as the Front End writes them
+
+(ert-deftest wolfram-nb-output-test-split-messages ()
+  (should-not (wolfram-nb--split-messages nil))
+  (should-not (wolfram-nb--split-messages " \n "))
+  (should (equal (wolfram-nb--split-messages "\nf::bad: oops")
+                 '("f::bad: oops")))
+  (should (equal (wolfram-nb--split-messages
+                  "Sin::argx: Sin called with 2 arguments;\n   1 argument is expected.\nPower::infy: Infinite expression 1/0 encountered.")
+                 '("Sin::argx: Sin called with 2 arguments;\n   1 argument is expected."
+                   "Power::infy: Infinite expression 1/0 encountered."))))
+
+(ert-deftest wolfram-nb-output-test-print-message-and-value-are-three-cells ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram
+Print[1]; 2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result
+     (point-max)
+     '(:status "ok" :stdout "1" :messages "\nf::bad: oops" :result "2") "Print[1]; 2")
+    (let ((cells (wolfram-nb--org-to-cells (buffer-string))))
+      (should (equal (cdr cells)
+                     '("Cell[\"1\", \"Print\"]"
+                       "Cell[\"f::bad: oops\", \"Message\", \"MSG\"]"
+                       "Cell[\"2\", \"Output\"]"))))))
+
+(defconst wolfram-nb-test--fraction-boxes
+  "FractionBox[\"1\", \"2\"]"
+  "Boxes the kernel might send for the result 1/2.")
+
+(ert-deftest wolfram-nb-output-test-result-is-saved-as-its-boxes-until-edited ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\n1/2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result
+     (point-max)
+     (list :status "ok" :result "1/2" :boxes wolfram-nb-test--fraction-boxes) "1/2")
+    (let ((cell (cadr (wolfram-nb--org-to-cells (buffer-string)))))
+      (should (string-match
+               "\\`Cell\\[BoxData\\[FractionBox\\[\"1\", \"2\"\\]\\], \"Output\", ExpressionUUID->\"\\([0-9a-f-]+\\)\"\\]\\'"
+               cell))
+      ;; editing the text drops the boxes but keeps the identity of the cell
+      (let ((uuid (match-string 1 cell)))
+        (goto-char (point-min))
+        (re-search-forward "^1/2$" nil t 2)
+        (replace-match "3/4")
+        (should (equal (cadr (wolfram-nb--org-to-cells (buffer-string)))
+                       (format "Cell[\"3/4\", \"Output\", ExpressionUUID->\"%s\"]" uuid)))))))
+
+(ert-deftest wolfram-nb-output-test-identical-outputs-keep-their-own-boxes ()
+  (wolfram-nb-test--in-buffer
+      "#+begin_src wolfram\na\n#+end_src\n\n#+begin_src wolfram\nb\n#+end_src\n"
+    (let ((first (save-excursion (re-search-forward "^#\\+end_src\n\n") (point))))
+      (wolfram-nb--apply-eval-result first '(:status "ok" :result "4" :boxes "\"\\\"4\\\"\"") "a"))
+    (wolfram-nb--apply-eval-result
+     (point-max) '(:status "ok" :result "4" :boxes "\"4\"") "b")
+    (let ((outputs (cl-remove-if-not (lambda (c) (string-match-p "\"Output\"" c))
+                                     (wolfram-nb--org-to-cells (buffer-string)))))
+      (should (= (length outputs) 2))
+      (should (string-match-p "BoxData\\[\"\\\\\"4\\\\\"\"\\]" (car outputs)))
+      (should (string-match-p "BoxData\\[\"4\"\\]" (cadr outputs)))
+      (should-not (equal (car outputs) (cadr outputs))))))
+
+(ert-deftest wolfram-nb-output-test-reevaluation-gives-the-value-a-new-identity ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\n1/2\n#+end_src\n\n"
+    (let ((end (point-max)))
+      (wolfram-nb--apply-eval-result
+       end (list :status "ok" :result "1/2" :boxes wolfram-nb-test--fraction-boxes) "1/2")
+      (wolfram-nb--apply-eval-result
+       end (list :status "ok" :result "1/2" :boxes wolfram-nb-test--fraction-boxes) "1/2")
+      (should (= (wolfram-nb-test--count "begin_example") 1))
+      (should (= (wolfram-nb-test--count "^#\\+ATTR_WOLFRAM: ExpressionUUID") 1)))))
 
 ;;; Graphics output
 

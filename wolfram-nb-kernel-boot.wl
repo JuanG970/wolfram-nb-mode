@@ -147,12 +147,16 @@ respond[id_String, code_String, timeout_, flags_String] :=
             png = pngOf[result];
             If [ByteArrayQ[png], emit[id, "PNG", b64[png]]]
         ];
-        If [graphical && StringContainsQ[flags, "b"],
+        (* The boxes of a result are what the Front End stores in its Output
+           cell.  A graphic always sends them; any other result only when
+           they are not huge. *)
+        If [status === "ok" && result =!= Null && StringContainsQ[flags, "b"],
             boxes = Quiet @ Check[
                 ToString[ToBoxes[result, StandardForm], InputForm, PageWidth -> Infinity],
                 $Failed
             ];
-            If [StringQ[boxes], emit[id, "BOXES", b64[boxes]]]
+            If [StringQ[boxes] && (graphical || StringLength[boxes] <= 100000),
+                emit[id, "BOXES", b64[boxes]]]
         ];
         emit[id, "DONE", ToString[Round[secs, 0.01]] <> " " <> status]
     ]

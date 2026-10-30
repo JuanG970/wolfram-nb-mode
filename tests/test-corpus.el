@@ -321,7 +321,8 @@ be imported."
 
 (defun wolfram-nb-corpus--outputs ()
   "Return the output texts of the current notebook buffer, one per source block.
-The text is nil for a block without output, and `graphics' for a graphic."
+The text is nil for a block without output, and `graphics' for a graphic.  The
+results of a block, its Print, Message and Output cells, are joined by newlines."
   (let (result)
     (goto-char (point-min))
     (while (re-search-forward "^#\\+begin_src wolfram\n" nil t)
@@ -329,15 +330,24 @@ The text is nil for a block without output, and `graphics' for a graphic."
       (skip-chars-forward " \t\n")
       (when (looking-at "#\\+RESULTS:\n")
         (goto-char (match-end 0)))
-      (push (cond
-             ((looking-at "#\\+begin_example\n")
-              (let ((start (match-end 0)))
-                (re-search-forward "^#\\+end_example")
-                (string-trim-right
-                 (buffer-substring-no-properties start (match-beginning 0)) "\n")))
-             ((looking-at "#\\+ATTR_WOLFRAM: :style \"Output\" :id ")
-              'graphics))
-            result))
+      (let ((texts '()) (graphics nil) (more t))
+        (while more
+          (cond
+           ((looking-at "#\\+ATTR_WOLFRAM: :style \"Output\" :id ")
+            (setq graphics t)
+            (re-search-forward "^#\\+end_src[ \t]*\n")
+            (skip-chars-forward " \t\n"))
+           ((looking-at "\\(?:#\\+ATTR_WOLFRAM:[^\n]*\n\\)?#\\+begin_example\n")
+            (let ((start (match-end 0)))
+              (re-search-forward "^#\\+end_example")
+              (push (string-trim-right
+                     (buffer-substring-no-properties start (match-beginning 0)) "\n")
+                    texts)
+              (skip-chars-forward " \t\n")))
+           (t (setq more nil))))
+        (push (cond (graphics 'graphics)
+                    (texts (string-join (nreverse texts) "\n")))
+              result)))
     (nreverse result)))
 
 (defmacro wolfram-nb-corpus--with-evaluated (name &rest body)

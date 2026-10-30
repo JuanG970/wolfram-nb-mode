@@ -162,6 +162,18 @@ mode and having the kernel compare the original with the saved file:
   leading blank, because Org trims the `#+NAME:` it was copied to, and
   `OutputFormData[...]` was saved as a quoted string. Both fixed; the kernel now
   reads the saved file as the same cells and the same groups
+- Evaluation results are written the way the Front End writes them. What the
+  block printed, each message and the value were one string `Output` cell,
+  so a `Print` was glued to the value; they are now a `Print` cell, a
+  `Message` cell (`"MSG"`) per message and an `Output` cell, under the one
+  `#+RESULTS:` line. The value is saved as typeset `BoxData` (`1/2 + x^2` as a
+  fraction and a power, not as a text picture), from the StandardForm boxes
+  the kernel returns and keeps for the cell under a new `ExpressionUUID`; if
+  the text of the result is edited it is saved as a string cell instead. A
+  result over 100,000 characters of boxes stays a string. Checked by opening
+  the saved files in the Front End: it reads a notebook saved by Emacs as
+  the same cells and groups as the original (`tests/corpus/fe-reads.wls`), and
+  an evaluated notebook as Section > Input, Print, Message, Output
 - Known limits: trailing blanks of an edited headline are trimmed; literal
   markup in a plain-string headline is read as formatting once the cell is
   edited; in an edited rich cell, styling other than bold, italic, underline
