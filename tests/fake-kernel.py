@@ -49,6 +49,7 @@ def main():
     sys.stdout.write("@@WNB 0 READY fake-1.0\n")
     sys.stdout.flush()
     values = {}
+    eval_line = 0
     for line in sys.stdin:
         parts = line.rstrip("\n").split(" ", 4)
         if parts[0] == "QUIT":
@@ -57,6 +58,7 @@ def main():
             continue
         _, rid, _timeout, flags, payload = parts
         code = base64.b64decode(payload).decode("utf-8")
+        eval_line += 1
         result = code
         if code == "Die":
             sys.exit(3)
@@ -86,17 +88,17 @@ def main():
             time.sleep(0.2)
             sys.stdout.write(text[12:])
             sys.stdout.flush()
-            emit(rid, "DONE", "0.01 ok")
+            emit(rid, "DONE", "0.01 ok %d" % eval_line)
             continue
         elif code == "Png":
             emit(rid, "RESULT", b64("-Graphics-"))
             emit(rid, "PNG", base64.b64encode(PNG).decode())
             if "b" in flags:
                 emit(rid, "BOXES", b64("GraphicsBox[{Circle[{0, 0}]}]"))
-            emit(rid, "DONE", "0.01 ok")
+            emit(rid, "DONE", "0.01 ok %d" % eval_line)
             continue
         emit(rid, "RESULT", b64(result))
-        emit(rid, "DONE", "0.01 ok")
+        emit(rid, "DONE", "0.01 ok %d" % eval_line)
     mark_clean_exit()
 
 

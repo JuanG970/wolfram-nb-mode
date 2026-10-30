@@ -315,13 +315,16 @@ TIMEOUT is in seconds or nil, FLAGS is a string of flag letters."
             (wolfram-nb-kernel--request-acc request)))))
 
 (defun wolfram-nb-kernel--finish (kernel request payload)
-  "Complete REQUEST on KERNEL; PAYLOAD is \"<seconds> <status>\"."
+  "Complete REQUEST on KERNEL; PAYLOAD is \"<seconds> <status> <line>\".
+The line is the kernel's $Line, and missing from an older kernel."
   (setf (wolfram-nb-kernel-pending kernel)
         (assoc-delete-all (wolfram-nb-kernel--request-id request)
                           (wolfram-nb-kernel-pending kernel)))
   (let* ((fields (split-string (or payload "") " " t))
          (result (list :status (or (cadr fields) "ok")
                        :seconds (string-to-number (or (car fields) "0")))))
+    (when (and (nth 2 fields) (string-match-p "\\`[0-9]+\\'" (nth 2 fields)))
+      (setq result (plist-put result :line (string-to-number (nth 2 fields)))))
     (dolist (entry (reverse (wolfram-nb-kernel--request-acc request)))
       (setq result (plist-put result (car entry) (cdr entry))))
     (wolfram-nb-kernel--deliver request result)))

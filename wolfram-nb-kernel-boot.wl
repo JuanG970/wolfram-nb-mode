@@ -21,7 +21,9 @@
        @@WNB <id> RESULT <payload>     OutputForm of the result
        @@WNB <id> PNG <payload>
        @@WNB <id> BOXES <payload>
-       @@WNB <id> DONE <seconds> <status>   status: ok | timeout | aborted
+       @@WNB <id> DONE <seconds> <status> <line>
+                                            status: ok | timeout | aborted
+                                            line: $Line of the evaluation, n of In[n] and Out[n]
 *)
 
 BeginPackage["WolframNB`Kernel`"]
@@ -158,7 +160,7 @@ respond[id_String, code_String, timeout_, flags_String] :=
             If [StringQ[boxes] && (graphical || StringLength[boxes] <= 100000),
                 emit[id, "BOXES", b64[boxes]]]
         ];
-        emit[id, "DONE", ToString[Round[secs, 0.01]] <> " " <> status]
+        emit[id, "DONE", ToString[Round[secs, 0.01]] <> " " <> status <> " " <> ToString[$Line]]
     ]
 
 (* One line, one request.  EOF on stdin means Emacs closed the pipe. *)

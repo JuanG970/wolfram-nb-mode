@@ -1697,10 +1697,14 @@ ATTR is either raw cell options or the keyword form `:style \"S\" :options \"O\"
   (cond
    ((null name) opts)
    ((and opts (string-match "CellLabel[ \t\n]*->[ \t\n]*\"\\([^\"]*\\)\"" opts))
-    ;; Org trims the name; a label that differs only in blanks is unchanged
-    (if (string= (string-trim (match-string 1 opts)) (string-trim name))
-        opts
-      (replace-match (format "CellLabel->\"%s\"" name) t t opts)))
+    ;; Org trims the name; a label that differs only in blanks is unchanged.
+    ;; `string-trim' changes the match data, so what is needed is taken first.
+    (let ((old (match-string 1 opts))
+          (before (substring opts 0 (match-beginning 0)))
+          (after (substring opts (match-end 0))))
+      (if (string= (string-trim old) (string-trim name))
+          opts
+        (concat before (format "CellLabel->\"%s\"" name) after))))
    (opts (format "%s, CellLabel->\"%s\"" opts name))
    (t (format "CellLabel->\"%s\"" name))))
 
@@ -3140,14 +3144,15 @@ Emacs slows down on very long lines; the rest of such a line is left out."
               (substring text 0 wolfram-nb-max-output-length)
               wolfram-nb-max-output-length (length text)))))
 
-(defun wolfram-nb--insert-example (text &optional label style options)
+(defun wolfram-nb--insert-example (text &optional label style options name)
   "Insert TEXT as an example block at point and return its (START . END).
 With LABEL the block starts a result: a #+RESULTS: line goes before it.  STYLE
 and OPTIONS are those of the cell the block becomes; the default is an Output
-cell without options."
+cell without options.  NAME, if given, is the cell's CellLabel, as #+NAME:."
   (setq text (wolfram-nb--limit-output text))
   (wolfram-nb--prepare-insertion)
   (when label (insert "#+RESULTS:\n"))
+  (when name (insert (format "#+NAME: %s\n" name)))
   (insert (wolfram-nb--attr-line (or style "Output") "Output" options))
   (let ((start (point)))
     (insert "#+begin_example\n" (org-escape-code-in-string text)
@@ -3173,6 +3178,28 @@ of the inserted block."
       (let ((ov (wolfram-nb--make-fold-overlay start (point) id)))
         (wolfram-nb--set-overlay-image ov png))
       (cons start (point)))))
+
+(defun wolfram-nb--label-input-block (position label)
+  "Give the source block that ends at POSITION the CellLabel LABEL.
+The label is the block's #+NAME: line, which is added when it has none.  A block
+that is a Code cell does not get one, as in the Front End."
+  (save-excursion
+    (goto-char position)
+    (when (re-search-backward "^[ \t]*#\\+begin_src[ \t]+wolfram\\([ \t\n]\\|$\\)" nil t)
+      (let ((begin (point)) (name-line nil) (code nil))
+        ;; the keyword lines directly above the block belong to it
+        (while (and (not (bobp))
+                    (progn (forward-line -1)
+                           (looking-at wolfram-nb--affiliated-regexp)))
+          (cond ((looking-at "[ \t]*#\\+NAME:") (setq name-line (point)))
+                ((looking-at "[ \t]*#\\+ATTR_WOLFRAM:.*:style \"Code\"") (setq code t))))
+        (unless code
+          (if name-line
+              (progn (goto-char name-line)
+                     (delete-region (point) (line-end-position))
+                     (insert (format "#+NAME: %s" label)))
+            (goto-char begin)
+            (insert (format "#+NAME: %s\n" label))))))))
 
 (defun wolfram-nb--new-uuid ()
   "Return a new random identifier of the form the Front End uses for cells."
@@ -3216,6 +3243,8 @@ their own: Print, Message and Output.  Return non-nil."
            (printed (string-trim (or (plist-get result :stdout) "")))
            (messages (wolfram-nb--split-messages (plist-get result :messages)))
            (value (string-trim (or (plist-get result :result) "")))
+           (line (plist-get result :line))
+           (end (copy-marker position))
            (label t))
       (cl-flet ((next-label () (prog1 label (setq label nil))))
         (goto-char position)
@@ -3241,12 +3270,17 @@ their own: Print, Message and Output.  Return non-nil."
           (let* ((shown (wolfram-nb--format-output value))
                  (options (and boxes
                                (format "ExpressionUUID->\"%s\"" (wolfram-nb--new-uuid))))
-                 (region (wolfram-nb--insert-example shown (next-label) "Output" options)))
+                 (region (wolfram-nb--insert-example
+                          shown (next-label) "Output" options
+                          (and line (format "Out[%d]=" line)))))
             (when options
               (wolfram-nb--remember-result-boxes
                options (wolfram-nb--limit-output shown) boxes))
             (wolfram-nb--render-evaluation-output
-             (car region) (cdr region) value code)))))
+             (car region) (cdr region) value code))))
+        (when line
+          (wolfram-nb--label-input-block end (format "In[%d]:=" line))))
+      (set-marker end nil)
       t)))
 
 ;;;; Evaluation — commands

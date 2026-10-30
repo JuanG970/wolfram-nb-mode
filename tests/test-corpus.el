@@ -337,7 +337,7 @@ results of a block, its Print, Message and Output cells, are joined by newlines.
             (setq graphics t)
             (re-search-forward "^#\\+end_src[ \t]*\n")
             (skip-chars-forward " \t\n"))
-           ((looking-at "\\(?:#\\+ATTR_WOLFRAM:[^\n]*\n\\)?#\\+begin_example\n")
+           ((looking-at "\\(?:#\\+\\(?:NAME\\|ATTR_WOLFRAM\\):[^\n]*\n\\)*#\\+begin_example\n")
             (let ((start (match-end 0)))
               (re-search-forward "^#\\+end_example")
               (push (string-trim-right

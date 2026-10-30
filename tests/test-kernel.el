@@ -191,6 +191,25 @@ This is what keeps a killed Emacs from leaking the kernel's licence slot."
     (should (wolfram-nb-kernel-ready-p k))
     (should (equal (wolfram-nb-kernel-version k) "fake-1.0"))))
 
+(ert-deftest wolfram-nb-kernel-test-result-reports-the-kernels-line ()
+  "The line, n in In[n] and Out[n], counts up with the evaluations."
+  (wolfram-nb-test--with-fake-kernel k
+    (should (equal (plist-get (wolfram-nb-test--eval k "1") :line) 1))
+    (should (equal (plist-get (wolfram-nb-test--eval k "2") :line) 2))))
+
+(ert-deftest wolfram-nb-kernel-test-done-without-a-line-is-still-understood ()
+  "A kernel that does not report the line gives a result without one."
+  (let ((got nil))
+    (cl-letf (((symbol-function 'wolfram-nb-kernel--deliver)
+               (lambda (_request result) (setq got result))))
+      (let* ((kernel (wolfram-nb-kernel--make))
+             (request (wolfram-nb-kernel--request-make :id "1")))
+        (wolfram-nb-kernel--finish kernel request "0.5 ok")
+        (should (equal (plist-get got :status) "ok"))
+        (should-not (plist-member got :line))
+        (wolfram-nb-kernel--finish kernel request "0.5 ok 12")
+        (should (equal (plist-get got :line) 12))))))
+
 (ert-deftest wolfram-nb-kernel-test-result-fields ()
   (wolfram-nb-test--with-fake-kernel k
     (let ((r (wolfram-nb-test--eval k "Print:hello")))

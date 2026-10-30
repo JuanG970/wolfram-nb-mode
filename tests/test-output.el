@@ -306,6 +306,74 @@ Print[1]; 2\n#+end_src\n\n"
       (should (= (wolfram-nb-test--count "begin_example") 1))
       (should (= (wolfram-nb-test--count "^#\\+ATTR_WOLFRAM: ExpressionUUID") 1)))))
 
+;;; In[n]:= and Out[n]=
+
+(defun wolfram-nb-test--cells ()
+  "Return the cells of the current buffer as strings."
+  (mapcar #'substring-no-properties (wolfram-nb--org-to-cells (buffer-string))))
+
+(ert-deftest wolfram-nb-output-test-input-and-output-get-their-labels ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\n2+2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result
+     (point-max) '(:status "ok" :result "4" :line 3) "2+2")
+    (should (string-match-p "#\\+NAME: In\\[3\\]:=\n#\\+begin_src wolfram\n" (buffer-string)))
+    (should (string-match-p "#\\+RESULTS:\n#\\+NAME: Out\\[3\\]=\n#\\+begin_example\n4\n"
+                            (buffer-string)))
+    (should (equal (wolfram-nb-test--cells)
+                   '("Cell[\"2+2\", \"Input\", CellLabel->\"In[3]:=\"]"
+                     "Cell[\"4\", \"Output\", CellLabel->\"Out[3]=\"]")))))
+
+(defun wolfram-nb-test--first-block-end ()
+  "Return the end of the first source block of the buffer, as a command finds it."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward "^#\\+end_src[ \t]*\n\\(?:[ \t]*\n\\)*")
+    (point)))
+
+(ert-deftest wolfram-nb-output-test-evaluating-again-moves-the-labels ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\n2+2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result
+     (wolfram-nb-test--first-block-end) '(:status "ok" :result "4" :line 3) "2+2")
+    (wolfram-nb--apply-eval-result
+     (wolfram-nb-test--first-block-end) '(:status "ok" :result "4" :line 7) "2+2")
+    (should (= (wolfram-nb-test--count "^#\\+NAME:") 2))
+    (should (string-match-p "#\\+NAME: In\\[7\\]:=" (buffer-string)))
+    (should (string-match-p "#\\+NAME: Out\\[7\\]=" (buffer-string)))
+    (should-not (string-match-p "\\[3\\]" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-a-label-from-the-notebook-is-replaced ()
+  "The block keeps its other options, and the label is the new one."
+  (wolfram-nb-test--in-buffer
+      (concat "#+NAME:  In[1]:=\n#+ATTR_WOLFRAM: CellLabel->\" In[1]:=\", ExpressionUUID->\"u-1\"\n"
+              "#+begin_src wolfram\n2+2\n#+end_src\n\n")
+    (wolfram-nb--apply-eval-result
+     (point-max) '(:status "ok" :result "4" :line 5) "2+2")
+    (should (= (wolfram-nb-test--count "^#\\+NAME: In") 1))
+    (should (equal (car (wolfram-nb-test--cells))
+                   "Cell[\"2+2\", \"Input\", CellLabel->\"In[5]:=\", ExpressionUUID->\"u-1\"]"))))
+
+(ert-deftest wolfram-nb-output-test-a-code-block-is-not-labelled ()
+  (wolfram-nb-test--in-buffer
+      "#+ATTR_WOLFRAM: :style \"Code\"\n#+begin_src wolfram\n2+2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result
+     (point-max) '(:status "ok" :result "4" :line 3) "2+2")
+    (should-not (string-match-p "In\\[" (buffer-string)))
+    (should (string-match-p "#\\+NAME: Out\\[3\\]=" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-no-line-no-labels ()
+  "An older kernel does not report the line; nothing is labelled then."
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\n2+2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result (point-max) '(:status "ok" :result "4") "2+2")
+    (should-not (string-match-p "#\\+NAME:" (buffer-string)))))
+
+(ert-deftest wolfram-nb-output-test-labelled-output-keeps-its-boxes ()
+  (wolfram-nb-test--in-buffer "#+begin_src wolfram\n1/2\n#+end_src\n\n"
+    (wolfram-nb--apply-eval-result
+     (point-max) (list :status "ok" :result "1/2" :line 2 :boxes "FractionBox[\"1\", \"2\"]") "1/2")
+    (should (string-match
+             "\\`Cell\\[BoxData\\[FractionBox\\[\"1\", \"2\"\\]\\], \"Output\", ExpressionUUID->\"[0-9a-f-]+\", CellLabel->\"Out\\[2\\]=\"\\]\\'"
+             (cadr (wolfram-nb-test--cells))))))
+
 ;;; Graphics output
 
 (defun wolfram-nb-test--graphics-result ()
