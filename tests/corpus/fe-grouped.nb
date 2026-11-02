@@ -1,0 +1,189 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='WolframEngine 15.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       160,          7]
+NotebookDataLength[      5745,        179]
+NotebookOptionsPosition[      3266,        123]
+NotebookOutlinePosition[      3683,        140]
+CellTagsIndexPosition[      3640,        137]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+
+Cell[CellGroupData[{
+Cell["Front End reference", "Title",ExpressionUUID->"506222bd-a430-4dd9-b6ac-c1192fdfff3b"],
+
+Cell[CellGroupData[{
+
+Cell["Basics", "Section",ExpressionUUID->"ec659601-d0d3-4616-8419-c8994711a393"],
+
+Cell["Written and evaluated by the Front End.", "Text",ExpressionUUID->"469877d8-c7bf-453e-b54d-c90c3277d08e"],
+
+Cell[CellGroupData[{
+
+Cell["\<\
+a = 5;
+{a, a^2}\
+\>", "Input",
+ CellLabel->" In[1]:=",ExpressionUUID->"753c6810-fe63-44f9-836d-2ef4a1735609"],
+
+Cell[OutputFormData["\<\
+{5, 25}\
+\>"], "Output",
+ CellChangeTimes->{4.002310005203064*^9},
+ CellLabel->" Out[2]=",ExpressionUUID->"1023f04b-6185-4b07-abaf-d2cd9ca92118"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["1/2 + x^2", "Input",
+ CellLabel->" In[3]:=",ExpressionUUID->"7fefad54-6fd9-4ce5-bf29-a16511de6cae"],
+
+Cell[OutputFormData["\<\
+1    2
+- + x
+2\
+\>"], "Output",
+ CellChangeTimes->{4.002310005205399*^9},
+ CellLabel->" Out[3]=",ExpressionUUID->"7958511f-d9b4-4f13-9dd4-5f835a927bc8"]
+}, Closed  ]],
+
+Cell[CellGroupData[{
+
+Cell["Plot[Sin[x], {x, 0, 1}]", "Input",
+ CellLabel->" In[4]:=",ExpressionUUID->"1738429d-9773-4375-9974-277fd5a1bdaf"],
+
+Cell[OutputFormData["\<\
+-Graphics-\
+\>"], "Output",
+ CellChangeTimes->{4.002310005444961*^9},
+ CellLabel->" Out[4]=",ExpressionUUID->"08279ead-e8d6-49a4-a9e5-315ab74c899b"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["Details", "Subsection",ExpressionUUID->"8bd82f35-5a6f-4068-80f7-0ad31d7c63f9"],
+
+Cell["Some detail.", "Text",ExpressionUUID->"70c044e9-4171-4b03-891c-35cb3f5632d8"],
+
+Cell[CellGroupData[{
+
+Cell["first item", "Item",ExpressionUUID->"689d39b6-6553-435a-964b-b7b0c24e3bae"],
+
+Cell["sub item", "Subitem",ExpressionUUID->"b95ac94e-d05a-4b0b-ae41-6390869dfcaf"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["second item", "Item",ExpressionUUID->"ed4c1313-ef11-4f43-96c5-580278e79977"],
+
+Cell[CellGroupData[{
+
+Cell["Sin[1, 2]", "Input",
+ CellLabel->" In[5]:=",ExpressionUUID->"4fff8b83-3c2b-4cc9-a950-82e15af52fcc"],
+
+Cell[OutputFormData["\<\
+Sin[1, 2]\
+\>"], "Output",
+ CellChangeTimes->{4.002310005468914*^9},
+ CellLabel->" Out[5]=",ExpressionUUID->"72a88576-ed06-40bb-96a9-671ce383a640"]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["Print[\"hi\"]; 3", "Input",
+ CellLabel->" In[6]:=",ExpressionUUID->"9a14ad65-cfea-4e33-9ea1-c054d4ff8c29"],
+
+Cell[OutputFormData["\<\
+3\
+\>"], "Output",
+ CellChangeTimes->{4.002310005470783*^9},
+ CellLabel->" Out[6]=",ExpressionUUID->"13bccf83-e9d4-45fa-970d-02c954ddab2c"]
+}, Open  ]]
+}, Open  ]]
+}, Open  ]]
+}, Open  ]],
+
+Cell[CellGroupData[{
+
+Cell["More", "Section",ExpressionUUID->"c33f3a71-2da3-44ab-99c8-6fcaf8a276ec"],
+
+Cell["Closing text.", "Text",ExpressionUUID->"d2c55380-76e4-459e-918c-5f2e9d6d6a6c"]
+}, Open  ]]
+}, Open  ]]
+},
+WindowSize->{537.75, 519.75},
+WindowMargins->{{30.75, Automatic}, {Automatic, 39.75}},
+Visible->False,
+FrontEndVersion->"15.0 for Linux x86 (64-bit) (May 26, 2026)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"fc7f2154-5b74-4049-82ff-771127323d11"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[CellGroupData[{
+Cell[582, 22, 91, 0, 70, "Title",ExpressionUUID->"506222bd-a430-4dd9-b6ac-c1192fdfff3b"],
+Cell[CellGroupData[{
+Cell[698, 26, 80, 0, 70, "Section",ExpressionUUID->"ec659601-d0d3-4616-8419-c8994711a393"],
+Cell[781, 28, 110, 0, 70, "Text",ExpressionUUID->"469877d8-c7bf-453e-b54d-c90c3277d08e"],
+Cell[CellGroupData[{
+Cell[916, 32, 119, 4, 46, "Input",ExpressionUUID->"753c6810-fe63-44f9-836d-2ef4a1735609"],
+Cell[1038, 38, 170, 4, 38, "Output",ExpressionUUID->"1023f04b-6185-4b07-abaf-d2cd9ca92118"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[1245, 47, 105, 1, 29, "Input",ExpressionUUID->"7fefad54-6fd9-4ce5-bf29-a16511de6cae"],
+Cell[1353, 50, 177, 6, 59, "Output",ExpressionUUID->"7958511f-d9b4-4f13-9dd4-5f835a927bc8"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[1567, 61, 119, 1, 29, "Input",ExpressionUUID->"1738429d-9773-4375-9974-277fd5a1bdaf"],
+Cell[1689, 64, 173, 4, 38, "Output",ExpressionUUID->"08279ead-e8d6-49a4-a9e5-315ab74c899b"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[1899, 73, 84, 0, 70, "Subsection",ExpressionUUID->"8bd82f35-5a6f-4068-80f7-0ad31d7c63f9"],
+Cell[1986, 75, 83, 0, 70, "Text",ExpressionUUID->"70c044e9-4171-4b03-891c-35cb3f5632d8"],
+Cell[CellGroupData[{
+Cell[2094, 79, 81, 0, 70, "Item",ExpressionUUID->"689d39b6-6553-435a-964b-b7b0c24e3bae"],
+Cell[2178, 81, 82, 0, 70, "Subitem",ExpressionUUID->"b95ac94e-d05a-4b0b-ae41-6390869dfcaf"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[2297, 86, 82, 0, 70, "Item",ExpressionUUID->"ed4c1313-ef11-4f43-96c5-580278e79977"],
+Cell[CellGroupData[{
+Cell[2404, 90, 105, 1, 29, "Input",ExpressionUUID->"4fff8b83-3c2b-4cc9-a950-82e15af52fcc"],
+Cell[2512, 93, 172, 4, 38, "Output",ExpressionUUID->"72a88576-ed06-40bb-96a9-671ce383a640"]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[2721, 102, 112, 1, 29, "Input",ExpressionUUID->"9a14ad65-cfea-4e33-9ea1-c054d4ff8c29"],
+Cell[2836, 105, 164, 4, 38, "Output",ExpressionUUID->"13bccf83-e9d4-45fa-970d-02c954ddab2c"]
+}, Open  ]]
+}, Open  ]]
+}, Open  ]]
+}, Open  ]],
+Cell[CellGroupData[{
+Cell[3073, 117, 78, 0, 70, "Section",ExpressionUUID->"c33f3a71-2da3-44ab-99c8-6fcaf8a276ec"],
+Cell[3154, 119, 84, 0, 70, "Text",ExpressionUUID->"d2c55380-76e4-459e-918c-5f2e9d6d6a6c"]
+}, Open  ]]
+}, Open  ]]
+}
+]
+*)
+
+(* End of internal cache information *)
+

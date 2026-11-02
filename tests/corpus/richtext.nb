@@ -1,0 +1,157 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Mathematica 14.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       158,          7]
+NotebookDataLength[      9999,        300]
+NotebookOptionsPosition[      8888,        280]
+NotebookOutlinePosition[      9300,        297]
+CellTagsIndexPosition[      9257,        294]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{Cell["Rich text", "Section", ExpressionUUID -> 
+    "00000065-aaaa-bbbb-cccc-dddddddd0065"], 
+  Cell[TextData[{"Some ", StyleBox["bold", FontWeight -> "Bold"], " and ", 
+     StyleBox["italic", "Italic"], " and ", StyleBox["underlined", 
+      "Underlined"], " and ", StyleBox["code", "Courier"], "."}], "Text", 
+   ExpressionUUID -> "00000066-aaaa-bbbb-cccc-dddddddd0066"], 
+  Cell[TextData[{StyleBox["Bold start", "Bold"], " then plain, ending ", 
+     StyleBox["italic", "Italic"]}], "Text", ExpressionUUID -> 
+    "00000067-aaaa-bbbb-cccc-dddddddd0067"], 
+  Cell[TextData[{StyleBox["Note: ", "Italic"], 
+     "the space is inside the styled text."}], "Text", 
+   ExpressionUUID -> "00000068-aaaa-bbbb-cccc-dddddddd0068"], 
+  Cell[TextData[{"A link: ", ButtonBox["Wolfram", BaseStyle -> "Hyperlink", 
+      ButtonData -> {URL["https://www.wolfram.com"], None}, 
+      ButtonNote -> "https://www.wolfram.com"], " and more text."}], "Text", 
+   ExpressionUUID -> "00000069-aaaa-bbbb-cccc-dddddddd0069"], 
+  Cell[TextData[{"Inline formula ", Cell[BoxData[FractionBox["a", "b"]], 
+      "InlineFormula"], " inside text."}], "Text", 
+   ExpressionUUID -> "0000006a-aaaa-bbbb-cccc-dddddddd006a"], 
+  Cell[TextData[{"Colored ", StyleBox["red", FontColor -> RGBColor[1, 0, 0]], 
+     " text."}], "Text", ExpressionUUID -> 
+    "0000006b-aaaa-bbbb-cccc-dddddddd006b"], Cell["Plain text with a named \
+character \[Alpha] and a dash \[Dash] and a Greek \[CapitalOmega].", "Text", 
+   ExpressionUUID -> "0000006c-aaaa-bbbb-cccc-dddddddd006c"], 
+  Cell[
+   "Plain text with quotes \" and backslash \\ and a tab \t and a\nnewline.", 
+   "Text", ExpressionUUID -> "0000006d-aaaa-bbbb-cccc-dddddddd006d"], 
+  Cell["Two paragraphs\n\nseparated by a blank line.", "Text", 
+   ExpressionUUID -> "0000006e-aaaa-bbbb-cccc-dddddddd006e"], 
+  Cell["Lines that look like Org syntax:\n* not a headline\n- not a list\n1. \
+not numbered\n#+not a keyword\n| not | a table |\n: not fixed width", "Text", 
+   ExpressionUUID -> "0000006f-aaaa-bbbb-cccc-dddddddd006f"], 
+  Cell["Literal markers in plain text: 5 * 3 * 2, a *star* here, /slashes/ \
+there, _under_ and =equals= and ~tilde~.", "Text", 
+   ExpressionUUID -> "00000070-aaaa-bbbb-cccc-dddddddd0070"], 
+  Cell[
+   "A plain link https://www.wolfram.com/mathematica and [[not a link]].", 
+   "Text", ExpressionUUID -> "00000071-aaaa-bbbb-cccc-dddddddd0071"], 
+  Cell["", "Text", ExpressionUUID -> "00000072-aaaa-bbbb-cccc-dddddddd0072"], 
+  Cell["   ", "Text", ExpressionUUID -> 
+    "00000073-aaaa-bbbb-cccc-dddddddd0073"], 
+  Cell["  leading and trailing blanks  ", "Text", 
+   ExpressionUUID -> "00000074-aaaa-bbbb-cccc-dddddddd0074"], 
+  Cell["A very long line of text without any line break. A very long line of \
+text without any line break. A very long line of text without any line break. \
+A very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. A \
+very long line of text without any line break. A very long line of text \
+without any line break. A very long line of text without any line break. ", 
+   "Text", ExpressionUUID -> "00000075-aaaa-bbbb-cccc-dddddddd0075"], 
+  Cell["Headline with \[Alpha] and trailing blank ", "Subsection", 
+   ExpressionUUID -> "00000076-aaaa-bbbb-cccc-dddddddd0076"], 
+  Cell["- looks like a list", "Text", ExpressionUUID -> 
+    "00000077-aaaa-bbbb-cccc-dddddddd0077"], 
+  Cell["Item with *literal* markers", "Item", 
+   ExpressionUUID -> "00000078-aaaa-bbbb-cccc-dddddddd0078"], 
+  Cell[TextData[{"Item with a ", ButtonBox["link", BaseStyle -> "Hyperlink", 
+      ButtonData -> {URL["https://example.com"], None}]}], "Item", 
+   ExpressionUUID -> "00000079-aaaa-bbbb-cccc-dddddddd0079"], 
+  Cell[TextData[{"Title with ", StyleBox["style", "Bold"]}], "Subsection", 
+   ExpressionUUID -> "0000007a-aaaa-bbbb-cccc-dddddddd007a"]}, 
+ WindowSize -> {808, 911}, WindowMargins -> {{4, Automatic}, {Automatic, 0}}, 
+ FrontEndVersion -> "14.0 for Linux x86 (64-bit) (December 12, 2023)", 
+ StyleDefinitions -> "Default.nb", ExpressionUUID -> 
+  "11111111-2222-3333-4444-555555555555"]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[110, 5, 40, 3, "Text",ExpressionUUID->"1-fake"],
+Cell[120, 5, 40, 3, "Text",ExpressionUUID->"2-fake"],
+Cell[130, 5, 40, 3, "Text",ExpressionUUID->"3-fake"],
+Cell[140, 5, 40, 3, "Text",ExpressionUUID->"4-fake"],
+Cell[150, 5, 40, 3, "Text",ExpressionUUID->"5-fake"],
+Cell[160, 5, 40, 3, "Text",ExpressionUUID->"6-fake"],
+Cell[170, 5, 40, 3, "Text",ExpressionUUID->"7-fake"],
+Cell[180, 5, 40, 3, "Text",ExpressionUUID->"8-fake"],
+Cell[190, 5, 40, 3, "Text",ExpressionUUID->"9-fake"],
+Cell[200, 5, 40, 3, "Text",ExpressionUUID->"10-fake"],
+Cell[210, 5, 40, 3, "Text",ExpressionUUID->"11-fake"],
+Cell[220, 5, 40, 3, "Text",ExpressionUUID->"12-fake"],
+Cell[230, 5, 40, 3, "Text",ExpressionUUID->"13-fake"],
+Cell[240, 5, 40, 3, "Text",ExpressionUUID->"14-fake"],
+Cell[250, 5, 40, 3, "Text",ExpressionUUID->"15-fake"],
+Cell[260, 5, 40, 3, "Text",ExpressionUUID->"16-fake"],
+Cell[270, 5, 40, 3, "Text",ExpressionUUID->"17-fake"],
+Cell[280, 5, 40, 3, "Text",ExpressionUUID->"18-fake"],
+Cell[290, 5, 40, 3, "Text",ExpressionUUID->"19-fake"],
+Cell[300, 5, 40, 3, "Text",ExpressionUUID->"20-fake"],
+Cell[310, 5, 40, 3, "Text",ExpressionUUID->"21-fake"],
+Cell[320, 5, 40, 3, "Text",ExpressionUUID->"22-fake"],
+Cell[330, 5, 40, 3, "Text",ExpressionUUID->"23-fake"]
+}
+]
+*)
+
+(* End of internal cache information *)

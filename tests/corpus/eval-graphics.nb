@@ -1,0 +1,47 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Mathematica 14.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       158,          7]
+NotebookDataLength[      9999,        300]
+NotebookOptionsPosition[      8888,        280]
+NotebookOutlinePosition[      9300,        297]
+CellTagsIndexPosition[      9257,        294]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{Cell["Evaluation: graphics", "Title"], 
+  Cell["Plot[Sin[x], {x, 0, 2 Pi}]", "Input"], Cell["x = 3", "Input"], 
+  Cell["Graphics3D[Sphere[]]", "Input"], Cell["Image[RandomReal[1, {6, 6}]]", 
+   "Input"], Cell["Plot[x t, {t, 0, 1}]", "Input"], 
+  Cell["Table[i^2, {i, 4}]", "Input"]}]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[110, 5, 40, 3, "Text",ExpressionUUID->"1-fake"],
+Cell[120, 5, 40, 3, "Text",ExpressionUUID->"2-fake"],
+Cell[130, 5, 40, 3, "Text",ExpressionUUID->"3-fake"],
+Cell[140, 5, 40, 3, "Text",ExpressionUUID->"4-fake"],
+Cell[150, 5, 40, 3, "Text",ExpressionUUID->"5-fake"],
+Cell[160, 5, 40, 3, "Text",ExpressionUUID->"6-fake"],
+Cell[170, 5, 40, 3, "Text",ExpressionUUID->"7-fake"]
+}
+]
+*)
+
+(* End of internal cache information *)

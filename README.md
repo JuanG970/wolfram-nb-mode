@@ -62,13 +62,13 @@ Plot[x^2, {x, -5, 5}]
 
 ### Cell Mapping
 
-| Org | Wolfram Cell |
-|-----|--------------|
-| `* Heading` | `"Section"` |
+| Org          | Wolfram Cell   |
+|--------------|----------------|
+| `* Heading`  | `"Section"`    |
 | `** Heading` | `"Subsection"` |
-| Paragraph | `"Text"` |
-| List item | `"Item"` |
-| Source block | `"Code"` |
+| Paragraph    | `"Text"`       |
+| List item    | `"Item"`       |
+| Source block | `"Code"`       |
 
 ## Examples
 

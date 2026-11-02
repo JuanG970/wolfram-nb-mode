@@ -1,0 +1,53 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Mathematica 14.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       158,          7]
+NotebookDataLength[      9999,        300]
+NotebookOptionsPosition[      8888,        280]
+NotebookOutlinePosition[      9300,        297]
+CellTagsIndexPosition[      9257,        294]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{Cell["Unicode 中文 and Café and π r\262", 
+   "Section", ExpressionUUID -> "000002bd-aaaa-bbbb-cccc-dddddddd02bd"], 
+  Cell["Raw text: 日本語, Ångström, \
+€5, °C, →, ∞.", "Text", 
+   ExpressionUUID -> "000002be-aaaa-bbbb-cccc-dddddddd02be"], 
+  Cell[BoxData[RowBox[{"\"héllo\"", "<>", "\"wörld\""}]], 
+   "Input", ExpressionUUID -> "000002bf-aaaa-bbbb-cccc-dddddddd02bf"], 
+  Cell[TextData[{"Mixed ", StyleBox["αβγ", "Bold"], 
+     " text."}], "Text", ExpressionUUID -> 
+    "000002c0-aaaa-bbbb-cccc-dddddddd02c0"]}, WindowSize -> {808, 911}, 
+ WindowMargins -> {{4, Automatic}, {Automatic, 0}}, 
+ FrontEndVersion -> "14.0 for Linux x86 (64-bit) (December 12, 2023)", 
+ StyleDefinitions -> "Default.nb", ExpressionUUID -> 
+  "11111111-2222-3333-4444-555555555555"]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[110, 5, 40, 3, "Text",ExpressionUUID->"1-fake"],
+Cell[120, 5, 40, 3, "Text",ExpressionUUID->"2-fake"],
+Cell[130, 5, 40, 3, "Text",ExpressionUUID->"3-fake"],
+Cell[140, 5, 40, 3, "Text",ExpressionUUID->"4-fake"]
+}
+]
+*)
+
+(* End of internal cache information *)

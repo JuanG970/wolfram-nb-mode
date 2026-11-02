@@ -1,0 +1,113 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Mathematica 14.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       158,          7]
+NotebookDataLength[      9999,        300]
+NotebookOptionsPosition[      8888,        280]
+NotebookOutlinePosition[      9300,        297]
+CellTagsIndexPosition[      9257,        294]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{Cell["A Title", "Title", ExpressionUUID -> 
+    "00000001-aaaa-bbbb-cccc-dddddddd0001"], Cell["A Subtitle", "Subtitle", 
+   ExpressionUUID -> "00000002-aaaa-bbbb-cccc-dddddddd0002"], 
+  Cell[CellGroupData[{Cell["First chapter", "Chapter", 
+      ExpressionUUID -> "00000003-aaaa-bbbb-cccc-dddddddd0003"], 
+     Cell["Text under the chapter.", "Text", ExpressionUUID -> 
+       "00000004-aaaa-bbbb-cccc-dddddddd0004"], 
+     Cell[CellGroupData[{Cell["A section", "Section", ExpressionUUID -> 
+          "00000005-aaaa-bbbb-cccc-dddddddd0005"], 
+        Cell["Text under the section.", "Text", ExpressionUUID -> 
+          "00000006-aaaa-bbbb-cccc-dddddddd0006"], 
+        Cell[CellGroupData[{Cell["A subsection", "Subsection", 
+            ExpressionUUID -> "00000007-aaaa-bbbb-cccc-dddddddd0007"], 
+           Cell[CellGroupData[{Cell["A subsubsection", "Subsubsection", 
+               ExpressionUUID -> "00000008-aaaa-bbbb-cccc-dddddddd0008"], 
+              Cell["Deep text.", "Text", ExpressionUUID -> 
+                "00000009-aaaa-bbbb-cccc-dddddddd0009"], Cell[BoxData[
+                RowBox[{"1", "+", "2", "+", "3"}]], "Input", CellLabel -> 
+                "In[1]:=", ExpressionUUID -> 
+                "0000000a-aaaa-bbbb-cccc-dddddddd000a"], Cell[BoxData["6"], 
+               "Output", CellLabel -> "Out[1]=", ExpressionUUID -> 
+                "0000000b-aaaa-bbbb-cccc-dddddddd000b"]}, Open]]}, Closed]]}, 
+       Open]]}, Open]], Cell["Bulleted items", "Subsection", 
+   ExpressionUUID -> "0000000c-aaaa-bbbb-cccc-dddddddd000c"], 
+  Cell["First item", "Item", ExpressionUUID -> 
+    "0000000d-aaaa-bbbb-cccc-dddddddd000d"], Cell["Second item", "Item", 
+   ExpressionUUID -> "0000000e-aaaa-bbbb-cccc-dddddddd000e"], 
+  Cell["A sub item", "Subitem", ExpressionUUID -> 
+    "0000000f-aaaa-bbbb-cccc-dddddddd000f"], Cell["A sub sub item", 
+   "Subsubitem", ExpressionUUID -> "00000010-aaaa-bbbb-cccc-dddddddd0010"], 
+  Cell["Numbered one", "ItemNumbered", ExpressionUUID -> 
+    "00000011-aaaa-bbbb-cccc-dddddddd0011"], Cell["Numbered two", 
+   "ItemNumbered", ExpressionUUID -> "00000012-aaaa-bbbb-cccc-dddddddd0012"], 
+  Cell["Numbered sub", "SubitemNumbered", ExpressionUUID -> 
+    "00000013-aaaa-bbbb-cccc-dddddddd0013"], Cell["Code style cell", "Code", 
+   ExpressionUUID -> "00000014-aaaa-bbbb-cccc-dddddddd0014"], 
+  Cell["Print(\"hello\")", "Print", ExpressionUUID -> 
+    "00000015-aaaa-bbbb-cccc-dddddddd0015"], Cell["Message text", "Message", 
+   "MSG", ExpressionUUID -> "00000016-aaaa-bbbb-cccc-dddddddd0016"], 
+  Cell["Echo output", "Echo", ExpressionUUID -> 
+    "00000017-aaaa-bbbb-cccc-dddddddd0017"], Cell["A custom style", 
+   "MyCustomStyle", ExpressionUUID -> 
+    "00000018-aaaa-bbbb-cccc-dddddddd0018"], Cell[TextData["Item paragraph"], 
+   "ItemParagraph", ExpressionUUID -> 
+    "00000019-aaaa-bbbb-cccc-dddddddd0019"]}, WindowSize -> {808, 911}, 
+ WindowMargins -> {{4, Automatic}, {Automatic, 0}}, 
+ FrontEndVersion -> "14.0 for Linux x86 (64-bit) (December 12, 2023)", 
+ StyleDefinitions -> "Default.nb", ExpressionUUID -> 
+  "11111111-2222-3333-4444-555555555555"]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[110, 5, 40, 3, "Text",ExpressionUUID->"1-fake"],
+Cell[120, 5, 40, 3, "Text",ExpressionUUID->"2-fake"],
+Cell[130, 5, 40, 3, "Text",ExpressionUUID->"3-fake"],
+Cell[140, 5, 40, 3, "Text",ExpressionUUID->"4-fake"],
+Cell[150, 5, 40, 3, "Text",ExpressionUUID->"5-fake"],
+Cell[160, 5, 40, 3, "Text",ExpressionUUID->"6-fake"],
+Cell[170, 5, 40, 3, "Text",ExpressionUUID->"7-fake"],
+Cell[180, 5, 40, 3, "Text",ExpressionUUID->"8-fake"],
+Cell[190, 5, 40, 3, "Text",ExpressionUUID->"9-fake"],
+Cell[200, 5, 40, 3, "Text",ExpressionUUID->"10-fake"],
+Cell[210, 5, 40, 3, "Text",ExpressionUUID->"11-fake"],
+Cell[220, 5, 40, 3, "Text",ExpressionUUID->"12-fake"],
+Cell[230, 5, 40, 3, "Text",ExpressionUUID->"13-fake"],
+Cell[240, 5, 40, 3, "Text",ExpressionUUID->"14-fake"],
+Cell[250, 5, 40, 3, "Text",ExpressionUUID->"15-fake"],
+Cell[260, 5, 40, 3, "Text",ExpressionUUID->"16-fake"],
+Cell[270, 5, 40, 3, "Text",ExpressionUUID->"17-fake"],
+Cell[280, 5, 40, 3, "Text",ExpressionUUID->"18-fake"],
+Cell[290, 5, 40, 3, "Text",ExpressionUUID->"19-fake"],
+Cell[300, 5, 40, 3, "Text",ExpressionUUID->"20-fake"],
+Cell[310, 5, 40, 3, "Text",ExpressionUUID->"21-fake"],
+Cell[320, 5, 40, 3, "Text",ExpressionUUID->"22-fake"],
+Cell[330, 5, 40, 3, "Text",ExpressionUUID->"23-fake"],
+Cell[340, 5, 40, 3, "Text",ExpressionUUID->"24-fake"],
+Cell[350, 5, 40, 3, "Text",ExpressionUUID->"25-fake"],
+Cell[360, 5, 40, 3, "Text",ExpressionUUID->"26-fake"],
+Cell[370, 5, 40, 3, "Text",ExpressionUUID->"27-fake"],
+Cell[380, 5, 40, 3, "Text",ExpressionUUID->"28-fake"],
+Cell[390, 5, 40, 3, "Text",ExpressionUUID->"29-fake"]
+}
+]
+*)
+
+(* End of internal cache information *)

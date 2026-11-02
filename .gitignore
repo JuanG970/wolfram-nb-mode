@@ -16,3 +16,4 @@ Thumbs.db
 # Temp files
 *.tmp
 *.bak
+/.agent-shell/

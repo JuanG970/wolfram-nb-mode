@@ -1,0 +1,116 @@
+#+TITLE: Wolfram NB Mode - Roadmap
+#+TODO: TODO(t) STARTED(s) | DONE(d) DROPPED(x)
+
+Goal: Emacs as a front end for Wolfram notebooks. Open any =.nb= from Dired,
+edit it as Org, evaluate on a persistent kernel, save, and get back a notebook
+the Front End reads as the one it would have written.
+
+How "round trip" is judged: the kernel reads the original and the saved file
+and compares cells, options and groups; the Front End itself reads both
+(=tests/corpus/fe-reads.wls=). The checks and the corpus are in
+=tests/corpus/README.md=.
+
+* Phase 1: Parsing Stability & Round-trip Fidelity
+** DONE Round-trip integrity across notebook files
+   An unedited notebook is written back exactly, as read by the kernel: 14
+   corpus notebooks (one written by the Front End) and a real 107-cell
+   notebook with 33 groups, 19 graphics and real options.
+** DONE Graceful handling of unrecognized cell types (raw block)
+** DONE Safe preservation of notebook and cell metadata
+   Notebook options, cell options, ExpressionUUID, CellLabel, and the nesting
+   and Open/Closed state of cell groups are kept.
+** DONE Performance scaling for notebooks with thousands of cells
+   7,000 cells and 3,000 groups: open 3.9 s, save 1.7 s.
+** DONE Write the Front End's header
+   A saved notebook starts with the Content-type and magic comments, as the
+   Front End writes them (=wolfram-nb-write-header=).
+** DROPPED Write the Front End's cache comments
+   The cache holds byte offsets that must be exact; a wrong one is worse than
+   none, and the Front End reads the file without it.
+
+* Phase 2: Core Org-Mode Markup Support
+** DONE Bulleted, numbered and nested lists
+** DROPPED Description lists
+   The Front End has no cell style for them. =term :: text= stays literal text
+   and round-trips unchanged.
+** DONE Inline markup: bold, italics, underline, verbatim
+** DONE Embedded images and graphics placeholder representation
+** DONE Quotes, tables and horizontal rules
+
+* Phase 3: Usability & Workspace UX
+** DONE Imenu support and outline-based navigation
+** DROPPED Dynamic mode-line cell counter
+** DONE Typed errors for parse and evaluation failures
+   =wolfram-nb-parse-error= and =wolfram-nb-eval-error= name the file, or the
+   kernel's status and time.
+** DONE Say which cell failed
+   A cell that cannot be shown as Org (no style, content that is an
+   expression, dynamic content) is kept whole instead of being dropped, and
+   opening the notebook names it. Errors give the line of the cell list or of
+   the block.
+** DONE Automatic configuration of wolframscript paths and sessions
+
+* Phase 4: Code Quality & Coverage
+** DONE Continuous Integration (test, byte-compile)
+** DONE Run the CI Emacs version (28.2)
+   Run by GitHub CI on the draft pull request (JuanG970/wolfram-nb-mode#2).
+   The first run failed one test: Emacs 28.2 starts a process whose program
+   is missing and reports an exit status, where Emacs 29 signals an error.
+   The kernel start now checks the program itself; the second run passed.
+** DONE Test coverage of the parsing and conversion routines
+   About 310 ERT tests, seeded fuzzers (cell/Org conversion, rich text, mixed
+   notebooks) and kernel-judged comparisons.
+** DONE Corpus of real notebooks
+   The 1,030 notebooks the Wolfram Engine ships (=tests/real/=; the files are
+   not stored, the runner and the counts are). Left as they were, every one
+   comes back with the same cells, groups and options as the kernel reads
+   them. Converted as if edited, 477 are identical; the rest differ in cells
+   Org cannot show.
+** DONE Byte-compilation without warnings
+
+* Phase 5: Front-end replacement
+** DONE Persistent kernel per notebook
+   Definitions and =%= carry across cells. Kernels run detached so a killed
+   Emacs does not leak a licence slot (=docs/KERNEL.md=).
+** DONE Graphics
+   Plots are kept as real Graphics cells and previewed inline.
+** DONE Notebooks are files
+   =find-file=, Dired, =save-buffer=, Evil =:w=, =write-file= and
+   =revert-buffer= work; a notebook that cannot be parsed is never written.
+** DONE Results as in org-babel
+   Results sit under =#+RESULTS:= and are replaced when the block is evaluated
+   again, including outputs that came with the notebook.
+** DONE Results as the Front End writes them
+   A Print cell, a Message cell per message and a typeset Output cell
+   (BoxData), kept as such unless the text is edited.
+** DONE Cell groups
+   Kept for the cells of an opened notebook; new Input+results, headings and
+   items are grouped as the Front End does (1,595 of 1,595 recorded groupings
+   reproduced, leaving out consecutive Print, Title and Subtitle cells).
+** DONE Highlighting only in wolfram source blocks
+** DONE Group the cells of a new notebook
+   A notebook made in Emacs, visited before it exists, or empty is saved with
+   the Front End's groups. One opened from a file without groups stays flat, so
+   an unedited file comes back as it was.
+** DONE In[n]:= and Out[n]= labels on evaluated cells
+   The kernel reports =$Line= (third field of =DONE=); evaluating again moves
+   the labels.
+** DONE Check with Mathematica desktop
+   =~/wnb-try/for-mathematica.nb= was made by the mode (groups, one closed,
+   formatted text, In/Out labels, Print, Message, a plot, a Manipulate). The
+   user opened it in Wolfram desktop on 2026-10-30 and it looked right.
+** DONE Styling beyond bold and italic in edited rich cells
+   Bold, italic, underline and code are written in the forms the Front End
+   writes (the default stylesheet has no styles named "Bold" or "Italic").
+   Colours and sizes of a span come back while the span's text is not edited;
+   editing that text drops them.
+** DONE Dynamic, Manipulate and other interactive cells
+   Kept as boxes whatever their size, so they stay interactive in Mathematica.
+** DROPPED Run Dynamic and Manipulate in Emacs
+   They need a Front End.
+** DROPPED Interrupt a running evaluation
+   Checked: SIGINT over a pipe kills the kernel and leaks its licence slot;
+   the =Interrupt>= menu exists only on a terminal, which the detached
+   kernel does not have. =C-g= stops Emacs waiting; the next request queues
+   behind the evaluation (=docs/KERNEL.md=, "Interrupting"). An evaluation
+   ends at =wolfram-nb-eval-timeout=.

@@ -1,0 +1,256 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Mathematica 14.0' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       158,          7]
+NotebookDataLength[      9999,        300]
+NotebookOptionsPosition[      8888,        280]
+NotebookOutlinePosition[      9300,        297]
+CellTagsIndexPosition[      9257,        294]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{Cell["Code", "Section", ExpressionUUID -> 
+    "000000c7-aaaa-bbbb-cccc-dddddddd00c7"], 
+  Cell[BoxData[RowBox[{"1", "+", "2"}]], "Input", CellLabel -> "In[1]:=", 
+   ExpressionUUID -> "000000c9-aaaa-bbbb-cccc-dddddddd00c9"], 
+  Cell[BoxData[RowBox[{SuperscriptBox["x", "2"], "+", 
+      RowBox[{"3", " ", "x"}], "+", "1"}]], "Input", CellLabel -> "In[2]:=", 
+   ExpressionUUID -> "000000ca-aaaa-bbbb-cccc-dddddddd00ca"], 
+  Cell[BoxData[FractionBox[RowBox[{"a", "+", "b"}], 
+     RowBox[{"c", "-", "d"}]]], "Input", CellLabel -> "In[3]:=", 
+   ExpressionUUID -> "000000cb-aaaa-bbbb-cccc-dddddddd00cb"], 
+  Cell[BoxData[SqrtBox[RowBox[{SuperscriptBox["x", "2"], "+", 
+       SuperscriptBox["y", "2"]}]]], "Input", CellLabel -> "In[4]:=", 
+   ExpressionUUID -> "000000cc-aaaa-bbbb-cccc-dddddddd00cc"], 
+  Cell[BoxData[RowBox[{SuperscriptBox[RowBox[{"Sin", "[", "x", "]"}], "2"], 
+      "+", SuperscriptBox[RowBox[{"Cos", "[", "x", "]"}], "2"]}]], "Input", 
+   CellLabel -> "In[5]:=", ExpressionUUID -> 
+    "000000cd-aaaa-bbbb-cccc-dddddddd00cd"], 
+  Cell[BoxData[RowBox[{RowBox[{"f", "[", RowBox[{"x_", ",", "y_"}], "]"}], 
+      ":=", RowBox[{SuperscriptBox["x", "y"], "+", SuperscriptBox["y", 
+         "x"]}]}]], "Input", CellLabel -> "In[6]:=", 
+   ExpressionUUID -> "000000ce-aaaa-bbbb-cccc-dddddddd00ce"], 
+  Cell[BoxData[RowBox[{"Table", "[", RowBox[{SuperscriptBox["i", "2"], ",", 
+        RowBox[{"{", RowBox[{"i", ",", "1", ",", "10"}], "}"}]}], "]"}]], 
+   "Input", CellLabel -> "In[7]:=", ExpressionUUID -> 
+    "000000cf-aaaa-bbbb-cccc-dddddddd00cf"], 
+  Cell[BoxData[RowBox[{UnderoverscriptBox["\[Sum]", RowBox[{"n", "=", "1"}], 
+       "\[Infinity]"], FractionBox["1", SuperscriptBox["n", "2"]]}]], 
+   "Input", CellLabel -> "In[8]:=", ExpressionUUID -> 
+    "000000d0-aaaa-bbbb-cccc-dddddddd00d0"], 
+  Cell[BoxData[RowBox[{SubsuperscriptBox["\[Integral]", 
+       RowBox[{"-", "\[Infinity]"}], "\[Infinity]"], 
+      RowBox[{RowBox[{"Exp", "[", RowBox[{"-", SuperscriptBox["x", "2"]}], 
+          "]"}], RowBox[{"\[DifferentialD]", "x"}]}]}]], "Input", 
+   CellLabel -> "In[9]:=", ExpressionUUID -> 
+    "000000d1-aaaa-bbbb-cccc-dddddddd00d1"], 
+  Cell[BoxData[RowBox[{SubscriptBox["\[PartialD]", RowBox[{"x"}]], 
+      SuperscriptBox["x", "n"]}]], "Input", CellLabel -> "In[10]:=", 
+   ExpressionUUID -> "000000d2-aaaa-bbbb-cccc-dddddddd00d2"], 
+  Cell[BoxData[RowBox[
+     {RowBox[{"{", RowBox[{RowBox[{"{", RowBox[{"1", ",", "2"}], "}"}], ",", 
+          RowBox[{"{", RowBox[{"3", ",", "4"}], "}"}]}], "}"}], ".", 
+      RowBox[{"{", RowBox[{RowBox[{"{", RowBox[{"5", ",", "6"}], "}"}], ",", 
+          RowBox[{"{", RowBox[{"7", ",", "8"}], "}"}]}], "}"}]}]], "Input", 
+   CellLabel -> "In[11]:=", ExpressionUUID -> 
+    "000000d3-aaaa-bbbb-cccc-dddddddd00d3"], 
+  Cell[BoxData[RowBox[{"Plot", "[", RowBox[{RowBox[{"Sin", "[", "x", "]"}], 
+        ",", RowBox[{"{", RowBox[{"x", ",", "0", ",", 
+            RowBox[{"2", " ", "\[Pi]"}]}], "}"}], ",", 
+        RowBox[{"PlotStyle", "\[Rule]", "Red"}]}], "]"}]], "Input", 
+   CellLabel -> "In[12]:=", ExpressionUUID -> 
+    "000000d4-aaaa-bbbb-cccc-dddddddd00d4"], 
+  Cell[BoxData[RowBox[{"If", "[", RowBox[{RowBox[{"a", ">", "1"}], ",", 
+        "\"yes\"", ",", "\"no\""}], "]"}]], "Input", CellLabel -> "In[13]:=", 
+   ExpressionUUID -> "000000d5-aaaa-bbbb-cccc-dddddddd00d5"], 
+  Cell[BoxData[RowBox[{"Module", "[", 
+      RowBox[{RowBox[{"{", RowBox[{"t", "=", "1"}], "}"}], ",", 
+        RowBox[{RowBox[{"t", "++"}], ";", SuperscriptBox["t", "2"]}]}], 
+      "]"}]], "Input", CellLabel -> "In[14]:=", 
+   ExpressionUUID -> "000000d6-aaaa-bbbb-cccc-dddddddd00d6"], 
+  Cell[BoxData[RowBox[{RowBox[{"(", RowBox[{SuperscriptBox["#1", "2"], "&"}], 
+        ")"}], "/@", RowBox[{"{", RowBox[{"1", ",", "2", ",", "3"}], 
+        "}"}]}]], "Input", CellLabel -> "In[15]:=", 
+   ExpressionUUID -> "000000d7-aaaa-bbbb-cccc-dddddddd00d7"], 
+  Cell[BoxData[RowBox[{"\"a\"", "<>", "\"b\\nc\"", "<>", "\"d\\\"e\"", "<>", 
+      "\"f\\\\g\""}]], "Input", CellLabel -> "In[16]:=", 
+   ExpressionUUID -> "000000d8-aaaa-bbbb-cccc-dddddddd00d8"], 
+  Cell[BoxData[RowBox[{"x", "/.", "\[VeryThinSpace]", 
+      RowBox[{"{", RowBox[{RowBox[{"x", "\[Rule]", "1"}], ",", 
+          RowBox[{"y", "\[Rule]", "2"}]}], "}"}]}]], "Input", 
+   CellLabel -> "In[17]:=", ExpressionUUID -> 
+    "000000d9-aaaa-bbbb-cccc-dddddddd00d9"], 
+  Cell[BoxData[RowBox[{"a", "=", RowBox[{"b", "=", "3"}]}]], "Input", 
+   CellLabel -> "In[18]:=", ExpressionUUID -> 
+    "000000da-aaaa-bbbb-cccc-dddddddd00da"], 
+  Cell[BoxData[RowBox[{SubscriptBox["a", "1"], "+", TemplateBox[{"b", "2"}, 
+       "Superscript", SyntaxForm -> SuperscriptBox]}]], "Input", 
+   CellLabel -> "In[19]:=", ExpressionUUID -> 
+    "000000db-aaaa-bbbb-cccc-dddddddd00db"], 
+  Cell[BoxData[RowBox[{UnderscriptBox["\[Limit]", 
+       RowBox[{"x", "\[Rule]", "0"}]], FractionBox[
+       RowBox[{"Sin", "[", "x", "]"}], "x"]}]], "Input", 
+   CellLabel -> "In[20]:=", ExpressionUUID -> 
+    "000000dc-aaaa-bbbb-cccc-dddddddd00dc"], 
+  Cell[BoxData[RowBox[{RowBox[{"{", RowBox[{"1", ",", "2", ",", "3"}], "}"}], 
+      "\[LeftDoubleBracket]", "2", "\[RightDoubleBracket]"}]], "Input", 
+   CellLabel -> "In[21]:=", ExpressionUUID -> 
+    "000000dd-aaaa-bbbb-cccc-dddddddd00dd"], 
+  Cell[BoxData[RowBox[{RowBox[{"Function", "[", 
+        RowBox[{RowBox[{"{", RowBox[{"u", ",", "v"}], "}"}], ",", 
+          RowBox[{"u", " ", "v"}]}], "]"}], "[", RowBox[{"2", ",", "3"}], 
+      "]"}]], "Input", CellLabel -> "In[22]:=", 
+   ExpressionUUID -> "000000de-aaaa-bbbb-cccc-dddddddd00de"], 
+  Cell[BoxData[RowBox[{RowBox[{"(", RowBox[{"a", "&&", "b"}], ")"}], "||", 
+      RowBox[{"!", "c"}]}]], "Input", CellLabel -> "In[23]:=", 
+   ExpressionUUID -> "000000df-aaaa-bbbb-cccc-dddddddd00df"], 
+  Cell[BoxData[RowBox[{"x", "\[Equal]", "y"}]], "Input", 
+   CellLabel -> "In[24]:=", ExpressionUUID -> 
+    "000000e0-aaaa-bbbb-cccc-dddddddd00e0"], 
+  Cell[BoxData[RowBox[{"x", "\[NotEqual]", "y"}]], "Input", 
+   CellLabel -> "In[25]:=", ExpressionUUID -> 
+    "000000e1-aaaa-bbbb-cccc-dddddddd00e1"], 
+  Cell[BoxData[RowBox[{"x", "\[LessEqual]", "y"}]], "Input", 
+   CellLabel -> "In[26]:=", ExpressionUUID -> 
+    "000000e2-aaaa-bbbb-cccc-dddddddd00e2"], 
+  Cell[BoxData[RowBox[{"a", "\[Rule]", "b"}]], "Input", 
+   CellLabel -> "In[27]:=", ExpressionUUID -> 
+    "000000e3-aaaa-bbbb-cccc-dddddddd00e3"], 
+  Cell[BoxData[RowBox[{"a", "\[RuleDelayed]", "b"}]], "Input", 
+   CellLabel -> "In[28]:=", ExpressionUUID -> 
+    "000000e4-aaaa-bbbb-cccc-dddddddd00e4"], 
+  Cell[BoxData[RowBox[{"FullSimplify", "[", 
+      RowBox[{SuperscriptBox[RowBox[{"Sin", "[", "x", "]"}], "2"], "+", 
+        SuperscriptBox[RowBox[{"Cos", "[", "x", "]"}], "2"]}], "]"}]], 
+   "Input", CellLabel -> "In[29]:=", ExpressionUUID -> 
+    "000000e5-aaaa-bbbb-cccc-dddddddd00e5"], 
+  Cell[BoxData[RowBox[{"1.5`*^-7", "+", "2.25`"}]], "Input", 
+   CellLabel -> "In[30]:=", ExpressionUUID -> 
+    "000000e6-aaaa-bbbb-cccc-dddddddd00e6"], 
+  Cell[BoxData["\"A string with \[Alpha] and \:4e2d\""], "Input", 
+   CellLabel -> "In[31]:=", ExpressionUUID -> 
+    "000000e7-aaaa-bbbb-cccc-dddddddd00e7"], 
+  Cell[BoxData[RowBox[{"Which", "[", RowBox[{RowBox[{"a", "<", "0"}], ",", 
+        RowBox[{"-", "1"}], ",", RowBox[{"a", "\[Equal]", "0"}], ",", "0", 
+        ",", "True", ",", "1"}], "]"}]], "Input", CellLabel -> "In[32]:=", 
+   ExpressionUUID -> "000000e8-aaaa-bbbb-cccc-dddddddd00e8"], 
+  Cell[BoxData[RowBox[{"Do", "[", RowBox[{RowBox[{"Print", "[", "i", "]"}], 
+        ",", RowBox[{"{", RowBox[{"i", ",", "3"}], "}"}]}], "]"}]], "Input", 
+   CellLabel -> "In[33]:=", ExpressionUUID -> 
+    "000000e9-aaaa-bbbb-cccc-dddddddd00e9"], 
+  Cell[BoxData[TemplateBox[{"\"a\"", "1"}, "RowDefault"]], "Input", 
+   CellLabel -> "In[34]:=", ExpressionUUID -> 
+    "000000ea-aaaa-bbbb-cccc-dddddddd00ea"], 
+  Cell[BoxData[RowBox[{"\[Integral]", 
+      RowBox[{FractionBox["1", RowBox[{"1", "+", SuperscriptBox["x", "2"]}]], 
+        RowBox[{"\[DifferentialD]", "x"}]}]}]], "Input", 
+   CellLabel -> "In[35]:=", ExpressionUUID -> 
+    "000000eb-aaaa-bbbb-cccc-dddddddd00eb"], 
+  Cell[BoxData[RowBox[{UnderoverscriptBox["\[Product]", 
+       RowBox[{"k", "=", "1"}], "5"], "k"}]], "Input", 
+   CellLabel -> "In[36]:=", ExpressionUUID -> 
+    "000000ec-aaaa-bbbb-cccc-dddddddd00ec"], 
+  Cell[BoxData[RowBox[{"-", SuperscriptBox["x", "2"]}]], "Input", 
+   CellLabel -> "In[37]:=", ExpressionUUID -> 
+    "000000ed-aaaa-bbbb-cccc-dddddddd00ed"], 
+  Cell[BoxData[RowBox[{"a", "-", RowBox[{"-", "b"}]}]], "Input", 
+   CellLabel -> "In[38]:=", ExpressionUUID -> 
+    "000000ee-aaaa-bbbb-cccc-dddddddd00ee"], 
+  Cell[BoxData[FractionBox["a", RowBox[{"b", " ", "c"}]]], "Input", 
+   CellLabel -> "In[39]:=", ExpressionUUID -> 
+    "000000ef-aaaa-bbbb-cccc-dddddddd00ef"], 
+  Cell[BoxData[RowBox[{"f", "[", RowBox[{"g", "[", 
+        RowBox[{"h", "[", "x", "]"}], "]"}], "]"}]], "Input", 
+   CellLabel -> "In[40]:=", ExpressionUUID -> 
+    "000000f0-aaaa-bbbb-cccc-dddddddd00f0"], 
+  Cell[BoxData[RowBox[{"Hold", "[", RowBox[{"1", "+", "1"}], "]"}]], "Input", 
+   CellLabel -> "In[41]:=", ExpressionUUID -> 
+    "000000f1-aaaa-bbbb-cccc-dddddddd00f1"], 
+  Cell[BoxData[{RowBox[{RowBox[{"x", "=", "1"}], ";"}], "\n", 
+     RowBox[{RowBox[{"y", "=", RowBox[{"x", "+", "2"}]}], ";"}], "\n", 
+     RowBox[{"Print", "[", RowBox[{"x", ",", "y"}], "]"}]}], "Input", 
+   ExpressionUUID -> "0000012c-aaaa-bbbb-cccc-dddddddd012c"], 
+  Cell["x^2 + y^2 (* a plain string input *)", "Input", 
+   ExpressionUUID -> "0000012d-aaaa-bbbb-cccc-dddddddd012d"], 
+  Cell["Plot[Sin[x], {x, 0, 6}]", "Code", ExpressionUUID -> 
+    "0000012e-aaaa-bbbb-cccc-dddddddd012e"], 
+  Cell[BoxData[RowBox[{"(*", " ", "a comment cell", " ", "*)"}]], "Input", 
+   ExpressionUUID -> "0000012f-aaaa-bbbb-cccc-dddddddd012f"], 
+  Cell[BoxData[TemplateBox[{"1", "\"m\"", "meters", "\"Meters\""}, 
+     "Quantity"]], "Input", ExpressionUUID -> 
+    "00000130-aaaa-bbbb-cccc-dddddddd0130"]}, WindowSize -> {808, 911}, 
+ WindowMargins -> {{4, Automatic}, {Automatic, 0}}, 
+ FrontEndVersion -> "14.0 for Linux x86 (64-bit) (December 12, 2023)", 
+ StyleDefinitions -> "Default.nb", ExpressionUUID -> 
+  "11111111-2222-3333-4444-555555555555"]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[110, 5, 40, 3, "Text",ExpressionUUID->"1-fake"],
+Cell[120, 5, 40, 3, "Text",ExpressionUUID->"2-fake"],
+Cell[130, 5, 40, 3, "Text",ExpressionUUID->"3-fake"],
+Cell[140, 5, 40, 3, "Text",ExpressionUUID->"4-fake"],
+Cell[150, 5, 40, 3, "Text",ExpressionUUID->"5-fake"],
+Cell[160, 5, 40, 3, "Text",ExpressionUUID->"6-fake"],
+Cell[170, 5, 40, 3, "Text",ExpressionUUID->"7-fake"],
+Cell[180, 5, 40, 3, "Text",ExpressionUUID->"8-fake"],
+Cell[190, 5, 40, 3, "Text",ExpressionUUID->"9-fake"],
+Cell[200, 5, 40, 3, "Text",ExpressionUUID->"10-fake"],
+Cell[210, 5, 40, 3, "Text",ExpressionUUID->"11-fake"],
+Cell[220, 5, 40, 3, "Text",ExpressionUUID->"12-fake"],
+Cell[230, 5, 40, 3, "Text",ExpressionUUID->"13-fake"],
+Cell[240, 5, 40, 3, "Text",ExpressionUUID->"14-fake"],
+Cell[250, 5, 40, 3, "Text",ExpressionUUID->"15-fake"],
+Cell[260, 5, 40, 3, "Text",ExpressionUUID->"16-fake"],
+Cell[270, 5, 40, 3, "Text",ExpressionUUID->"17-fake"],
+Cell[280, 5, 40, 3, "Text",ExpressionUUID->"18-fake"],
+Cell[290, 5, 40, 3, "Text",ExpressionUUID->"19-fake"],
+Cell[300, 5, 40, 3, "Text",ExpressionUUID->"20-fake"],
+Cell[310, 5, 40, 3, "Text",ExpressionUUID->"21-fake"],
+Cell[320, 5, 40, 3, "Text",ExpressionUUID->"22-fake"],
+Cell[330, 5, 40, 3, "Text",ExpressionUUID->"23-fake"],
+Cell[340, 5, 40, 3, "Text",ExpressionUUID->"24-fake"],
+Cell[350, 5, 40, 3, "Text",ExpressionUUID->"25-fake"],
+Cell[360, 5, 40, 3, "Text",ExpressionUUID->"26-fake"],
+Cell[370, 5, 40, 3, "Text",ExpressionUUID->"27-fake"],
+Cell[380, 5, 40, 3, "Text",ExpressionUUID->"28-fake"],
+Cell[390, 5, 40, 3, "Text",ExpressionUUID->"29-fake"],
+Cell[400, 5, 40, 3, "Text",ExpressionUUID->"30-fake"],
+Cell[410, 5, 40, 3, "Text",ExpressionUUID->"31-fake"],
+Cell[420, 5, 40, 3, "Text",ExpressionUUID->"32-fake"],
+Cell[430, 5, 40, 3, "Text",ExpressionUUID->"33-fake"],
+Cell[440, 5, 40, 3, "Text",ExpressionUUID->"34-fake"],
+Cell[450, 5, 40, 3, "Text",ExpressionUUID->"35-fake"],
+Cell[460, 5, 40, 3, "Text",ExpressionUUID->"36-fake"],
+Cell[470, 5, 40, 3, "Text",ExpressionUUID->"37-fake"],
+Cell[480, 5, 40, 3, "Text",ExpressionUUID->"38-fake"],
+Cell[490, 5, 40, 3, "Text",ExpressionUUID->"39-fake"],
+Cell[500, 5, 40, 3, "Text",ExpressionUUID->"40-fake"],
+Cell[510, 5, 40, 3, "Text",ExpressionUUID->"41-fake"],
+Cell[520, 5, 40, 3, "Text",ExpressionUUID->"42-fake"],
+Cell[530, 5, 40, 3, "Text",ExpressionUUID->"43-fake"],
+Cell[540, 5, 40, 3, "Text",ExpressionUUID->"44-fake"],
+Cell[550, 5, 40, 3, "Text",ExpressionUUID->"45-fake"],
+Cell[560, 5, 40, 3, "Text",ExpressionUUID->"46-fake"],
+Cell[570, 5, 40, 3, "Text",ExpressionUUID->"47-fake"]
+}
+]
+*)
+
+(* End of internal cache information *)
